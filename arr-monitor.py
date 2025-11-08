@@ -13,7 +13,6 @@ import psutil
 import argparse
 from pathlib import Path
 from datetime import datetime
-from collections import defaultdict
 
 # Media manager process names to auto-detect
 ARR_MANAGERS = [
@@ -34,7 +33,7 @@ class FileTransferInfo:
         self.filepath = filepath
         self.position = position
         self.size = size
-        self.target_size = target_size if target_size is not None else size  # Lock in target
+        self.target_size = target_size if target_size is not None else size
         self.last_position = position
         self.last_time = time.time()
         self.speed = 0
@@ -45,7 +44,6 @@ class FileTransferInfo:
         current_time = time.time()
         time_delta = current_time - self.last_time
         
-        # Use actual file size as position (more reliable for sequential writes)
         actual_position = size
         
         if time_delta > 0:
@@ -57,7 +55,6 @@ class FileTransferInfo:
         self.position = actual_position
         self.size = size
         self.last_time = current_time
-        # NOTE: target_size stays constant - it was set at initialization
     
     @property
     def percent(self):
@@ -124,38 +121,32 @@ def find_arr_processes():
 def get_open_files(pid):
     """Get files currently being written by the process"""
     open_files = {}
-    read_files = {}  # Track files being read (potential sources)
+    read_files = {}
     
     try:
-        # Read /proc/<pid>/fd and /proc/<pid>/fdinfo
         fd_dir = Path(f"/proc/{pid}/fd")
         fdinfo_dir = Path(f"/proc/{pid}/fdinfo")
         
         if not fd_dir.exists() or not fdinfo_dir.exists():
             return {}
         
-        # First pass: collect all file info
         all_fds = {}
         for fd_link in fd_dir.iterdir():
             try:
                 fd = fd_link.name
                 filepath = fd_link.resolve()
                 
-                # Skip if not a regular file
                 if not filepath.is_file():
                     continue
                 
-                # Skip ignored files
                 if should_ignore_file(str(filepath)):
                     continue
                 
-                # Get file size early
                 try:
                     file_size = filepath.stat().st_size
                 except (OSError, FileNotFoundError):
                     continue
                 
-                # Read fdinfo to get position and flags
                 fdinfo_path = fdinfo_dir / fd
                 if not fdinfo_path.exists():
                     continue
@@ -169,11 +160,10 @@ def get_open_files(pid):
                             if line.startswith('pos:'):
                                 position = int(line.split()[1])
                             elif line.startswith('flags:'):
-                                flags = int(line.split()[1], 8)  # Octal
+                                flags = int(line.split()[1], 8)
                 except (OSError, ValueError):
                     continue
                 
-                # Check access mode
                 access_mode = flags & 0o3
                 
                 all_fds[fd] = {
@@ -187,34 +177,24 @@ def get_open_files(pid):
             except (PermissionError, OSError):
                 continue
         
-        # Second pass: identify read and write files
         for fd, info in all_fds.items():
             access_mode = info['access_mode']
             
-            # Read-only files (potential sources)
             if access_mode == 0:
-                # Store by filename for matching
                 filename = info['filepath'].name
                 read_files[filename] = info['file_size']
             
-            # Writable files (destinations)
-            elif access_mode in (1, 2):  # O_WRONLY or O_RDWR
+            elif access_mode in (1, 2):
                 filepath = info['filepath']
                 file_size = info['file_size']
                 position = info['position']
                 
-                # Use current file size as position (more reliable)
                 current_pos = file_size
                 
-                # Try to find matching source file to get target size
                 filename = filepath.name
                 target_size = read_files.get(filename, file_size)
                 
-                # If no matching read file, use a heuristic:
-                # If file_size is small compared to typical media, it's probably still growing
-                # Use max of current size * 2 as estimate (will adjust as it grows)
-                if target_size == file_size and file_size < 10 * 1024 * 1024 * 1024:  # < 10GB
-                    # No source found, we'll track size growth
+                if target_size == file_size and file_size < 10 * 1024 * 1024 * 1024:
                     target_size = file_size if file_size > 0 else 1
                 
                 key = f"{fd}_{filepath}"
@@ -239,66 +219,73 @@ def select_process_interactive():
     if len(processes) == 1:
         pid, name = processes[0]
         print(f"Found: {name} (PID: {pid})")
-        return pid
+        return [pid]
     
     print(f"Found {len(processes)} *arr process(es):\n")
     for i, (pid, name) in enumerate(processes, 1):
         print(f"  {i}. {name} (PID: {pid})")
+    print(f"  A. Monitor all")
     
     while True:
         try:
-            choice = input(f"\nSelect process to monitor [1-{len(processes)}]: ")
+            choice = input(f"\nSelect process to monitor [1-{len(processes)}/A]: ").strip()
+            if choice.upper() == 'A':
+                return [pid for pid, name in processes]
             idx = int(choice) - 1
             if 0 <= idx < len(processes):
-                return processes[idx][0]
+                return [processes[idx][0]]
             print("Invalid selection")
         except (ValueError, KeyboardInterrupt):
             return None
 
-def draw_ui(stdscr, pid, files, last_update):
+def draw_ui(stdscr, pid_list, all_files, last_update):
     """Draw the curses UI"""
     stdscr.clear()
     height, width = stdscr.getmaxyx()
     
-    # Header
-    try:
-        proc = psutil.Process(pid)
-        proc_name = proc.name()
-    except:
-        proc_name = "Unknown"
+    if len(pid_list) == 1:
+        try:
+            proc = psutil.Process(pid_list[0])
+            proc_name = f"{proc.name()} (PID: {pid_list[0]})"
+        except:
+            proc_name = f"PID: {pid_list[0]}"
+    else:
+        proc_name = f"Monitoring {len(pid_list)} processes"
     
-    header = f"*arr File Transfer Monitor - PID: {pid} ({proc_name})"
+    header = f"*arr File Transfer Monitor - {proc_name}"
     stdscr.addstr(0, 0, header[:width-1], curses.A_BOLD | curses.color_pair(1))
     stdscr.addstr(1, 0, f"Time: {datetime.now().strftime('%H:%M:%S')}", curses.color_pair(2))
     stdscr.addstr(2, 0, "─" * min(width - 1, 80))
     
-    if not files:
+    if not all_files:
         stdscr.addstr(4, 0, "No active file writes detected...", curses.color_pair(3))
         stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
         stdscr.refresh()
         return
     
-    # File information
     row = 4
-    for key, file_info in files.items():
+    for (pid, key), file_info in all_files.items():
         if row >= height - 3:
             break
         
-        # Filename
-        filename = file_info.filename
+        try:
+            proc = psutil.Process(pid)
+            prefix = f"[{proc.name()}] "
+        except:
+            prefix = f"[PID {pid}] "
+        
+        filename = prefix + file_info.filename
         if len(filename) > width - 1:
-            filename = "..." + filename[-(width-4):]
+            filename = filename[:width-4] + "..."
         stdscr.addstr(row, 0, filename, curses.A_BOLD | curses.color_pair(4))
         row += 1
         
-        # Filepath
         filepath = f"  {file_info.filepath}"
         if len(filepath) > width - 1:
             filepath = filepath[:width-4] + "..."
         stdscr.addstr(row, 0, filepath, curses.color_pair(5))
         row += 1
         
-        # Progress bar
         bar_width = min(40, width - 20)
         filled = int((file_info.percent / 100) * bar_width)
         bar = "█" * filled + "░" * (bar_width - filled)
@@ -306,7 +293,6 @@ def draw_ui(stdscr, pid, files, last_update):
         stdscr.addstr(row, 0, progress_str, curses.color_pair(6))
         row += 1
         
-        # Size and speed info
         size_str = f"  {format_size(file_info.position)} / {format_size(file_info.target_size)}"
         stdscr.addstr(row, 0, size_str, curses.color_pair(2))
         
@@ -322,13 +308,11 @@ def draw_ui(stdscr, pid, files, last_update):
         if row >= height - 2:
             break
     
-    # Footer
     stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
     stdscr.refresh()
 
-def monitor_with_curses(stdscr, pid):
+def run_monitor(stdscr, pid_list):
     """Main monitoring loop with curses UI"""
-    # Setup colors
     curses.start_color()
     curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
     curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLACK)
@@ -338,7 +322,6 @@ def monitor_with_curses(stdscr, pid):
     curses.init_pair(6, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
     curses.init_pair(7, curses.COLOR_CYAN, curses.COLOR_BLACK)
     
-    # Non-blocking input
     stdscr.nodelay(True)
     curses.curs_set(0)
     
@@ -347,45 +330,43 @@ def monitor_with_curses(stdscr, pid):
     
     while True:
         try:
-            # Check for quit key
             key = stdscr.getch()
             if key == ord('q') or key == ord('Q'):
                 break
             
-            # Check if process still exists
-            if not psutil.pid_exists(pid):
+            active_pids = [p for p in pid_list if psutil.pid_exists(p)]
+            if not active_pids:
                 stdscr.clear()
-                stdscr.addstr(0, 0, f"Process {pid} has exited.", curses.A_BOLD)
+                stdscr.addstr(0, 0, "All monitored processes have exited.", curses.A_BOLD)
                 stdscr.addstr(1, 0, "Press any key to exit...")
                 stdscr.nodelay(False)
                 stdscr.getch()
                 break
             
-            # Get current open files
-            current_files = get_open_files(pid)
+            current_files = {}
+            for pid in active_pids:
+                pid_files = get_open_files(pid)
+                for key, file_info in pid_files.items():
+                    current_files[(pid, key)] = file_info
             
-            # Update tracked files
-            for key, file_info in current_files.items():
-                if key in tracked_files:
-                    tracked_files[key].update(file_info.position, file_info.size)
+            for composite_key, file_info in current_files.items():
+                if composite_key in tracked_files:
+                    tracked_files[composite_key].update(file_info.position, file_info.size)
                 else:
-                    tracked_files[key] = file_info
+                    tracked_files[composite_key] = file_info
             
-            # Remove files that are no longer open
             keys_to_remove = [k for k in tracked_files if k not in current_files]
             for key in keys_to_remove:
                 del tracked_files[key]
             
-            # Draw UI
-            draw_ui(stdscr, pid, tracked_files, last_update)
+            draw_ui(stdscr, active_pids, tracked_files, last_update)
             last_update = time.time()
             
-            time.sleep(0.5)  # Faster refresh - 500ms
+            time.sleep(0.5)
         
         except KeyboardInterrupt:
             break
         except curses.error:
-            # Window too small or other curses error
             time.sleep(0.1)
             continue
 
@@ -393,72 +374,61 @@ def main():
     parser = argparse.ArgumentParser(
         description='Monitor file write operations for *arr media managers'
     )
-    parser.add_argument('pid', type=int, nargs='?', 
-                       help='Process ID to monitor')
+    parser.add_argument('pids', type=int, nargs='*', 
+                       help='Process ID(s) to monitor')
     parser.add_argument('-d', '--debug', action='store_true',
                        help='Show debug information')
     
     args = parser.parse_args()
     
-    # Determine PID to monitor
-    if args.pid:
-        pid = args.pid
-        if not psutil.pid_exists(pid):
-            print(f"Error: Process {pid} does not exist")
-            return 1
+    if args.pids:
+        pids = args.pids
+        for pid in pids:
+            if not psutil.pid_exists(pid):
+                print(f"Error: Process {pid} does not exist")
+                return 1
         
-        try:
-            proc = psutil.Process(pid)
-            print(f"Monitoring: {proc.name()} (PID: {pid})")
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            print(f"Monitoring PID: {pid}")
+        if len(pids) == 1:
+            try:
+                proc = psutil.Process(pids[0])
+                print(f"Monitoring: {proc.name()} (PID: {pids[0]})")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                print(f"Monitoring PID: {pids[0]}")
+        else:
+            print(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
     else:
-        pid = select_process_interactive()
-        if pid is None:
+        pids = select_process_interactive()
+        if pids is None:
             return 1
     
-    # Debug mode - print what we find and exit
     if args.debug:
-        print(f"\nDebug: Scanning /proc/{pid}/fd/...")
-        files = get_open_files(pid)
-        if not files:
-            print("No files found matching criteria")
-            
-            # Show all FDs for debugging
-            print("\nAll open file descriptors:")
-            fd_dir = Path(f"/proc/{pid}/fd")
-            for fd_link in fd_dir.iterdir():
-                try:
-                    filepath = fd_link.resolve()
-                    fdinfo_path = Path(f"/proc/{pid}/fdinfo/{fd_link.name}")
-                    
-                    if fdinfo_path.exists():
-                        with open(fdinfo_path, 'r') as f:
-                            lines = f.read()
-                        print(f"\nFD {fd_link.name}: {filepath}")
-                        print(f"  fdinfo: {lines[:200]}")
-                except:
-                    pass
-        else:
-            print(f"\nFound {len(files)} file(s) being written:")
-            for key, info in files.items():
-                print(f"\n  FD {info.fd}: {info.filepath}")
-                print(f"    Position: {info.position}, Size: {info.size}")
-                print(f"    Percent: {info.percent:.1f}%")
+        for pid in pids:
+            print(f"\nDebug: Scanning /proc/{pid}/fd/...")
+            files = get_open_files(pid)
+            if not files:
+                print("No files found matching criteria")
+            else:
+                print(f"\nFound {len(files)} file(s) being written:")
+                for key, info in files.items():
+                    print(f"\n  FD {info.fd}: {info.filepath}")
+                    print(f"    Position: {info.position}, Target: {info.target_size}")
+                    print(f"    Percent: {info.percent:.1f}%")
         return 0
     
-    # Check for root/sudo if needed
-    try:
-        test_dir = Path(f"/proc/{pid}/fd")
-        list(test_dir.iterdir())
-    except PermissionError:
-        print("\nError: Permission denied. Try running with sudo:")
-        print(f"  sudo {sys.argv[0]} {pid}")
-        return 1
+    for pid in pids:
+        try:
+            test_dir = Path(f"/proc/{pid}/fd")
+            list(test_dir.iterdir())
+        except PermissionError:
+            print(f"\nError: Permission denied for PID {pid}. Try running with sudo:")
+            print(f"  sudo {sys.argv[0]} {' '.join(map(str, pids))}")
+            return 1
+        except FileNotFoundError:
+            print(f"\nError: Process {pid} no longer exists")
+            return 1
     
-    # Start curses interface
     try:
-        curses.wrapper(monitor_with_curses, pid)
+        curses.wrapper(run_monitor, pids)
     except KeyboardInterrupt:
         pass
     
