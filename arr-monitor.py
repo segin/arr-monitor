@@ -240,8 +240,10 @@ def select_process_interactive():
 
 def draw_ui(stdscr, pid_list, all_files, last_update):
     """Draw the curses UI"""
-    stdscr.clear()
     height, width = stdscr.getmaxyx()
+    
+    # Clear and redraw (use erase instead of clear to avoid flicker)
+    stdscr.erase()
     
     if len(pid_list) == 1:
         try:
@@ -260,7 +262,8 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
     if not all_files:
         stdscr.addstr(4, 0, "No active file writes detected...", curses.color_pair(3))
         stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
-        stdscr.refresh()
+        stdscr.noutrefresh()
+        curses.doupdate()
         return
     
     row = 4
@@ -309,7 +312,10 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
             break
     
     stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
-    stdscr.refresh()
+    
+    # Use noutrefresh + doupdate for smoother rendering
+    stdscr.noutrefresh()
+    curses.doupdate()
 
 def run_monitor(stdscr, pid_list):
     """Main monitoring loop with curses UI"""
