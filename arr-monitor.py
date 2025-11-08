@@ -11,6 +11,7 @@ import time
 import curses
 import psutil
 import argparse
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -34,6 +35,7 @@ class FileTransferInfo:
         self.position = position
         self.size = size
         self.target_size = target_size if target_size is not None else size
+        self.initial_target = self.target_size  # Remember the first target we saw
         self.last_position = position
         self.last_time = time.time()
         self.speed = 0
@@ -45,6 +47,12 @@ class FileTransferInfo:
         time_delta = current_time - self.last_time
         
         actual_position = size
+        
+        # Only expand target if position significantly exceeds it
+        # This handles cases where target was initially wrong
+        # But don't keep expanding if we're close to the target
+        if actual_position > self.target_size * 1.1:  # 10% buffer
+            self.target_size = actual_position
         
         if time_delta > 0:
             bytes_written = actual_position - self.last_position
@@ -60,7 +68,9 @@ class FileTransferInfo:
     def percent(self):
         """Calculate percentage complete"""
         if self.target_size > 0:
-            return (self.position / self.target_size) * 100
+            pct = (self.position / self.target_size) * 100
+            # Cap at 100% for display purposes
+            return min(pct, 100.0)
         return 0
     
     @property
@@ -100,6 +110,43 @@ def format_time(seconds):
     if hours > 0:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
+
+def extract_episode_info(filename):
+    """Extract season/episode information from filename"""
+    # Match patterns like S01E02, s01e02, 1x02, etc.
+    patterns = [
+        r'[Ss](\d+)[Ee](\d+)',  # S01E02 or s01e02
+        r'(\d+)[xX](\d+)',       # 1x02 or 1X02
+        r'[Ss]eason\s*(\d+).*[Ee]pisode\s*(\d+)',  # Season 1 Episode 2
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, filename)
+        if match:
+            season = int(match.group(1))
+            episode = int(match.group(2))
+            return (season, episode)
+    
+    return None
+
+def find_matching_source(dest_filename, read_files):
+    """Find the best matching source file for a destination"""
+    # Try exact match first (case-insensitive)
+    dest_lower = dest_filename.lower()
+    for src_name, src_size in read_files.items():
+        if src_name.lower() == dest_lower:
+            return src_size
+    
+    # Try episode matching (SxxExx)
+    dest_ep = extract_episode_info(dest_filename)
+    if dest_ep:
+        for src_name, src_size in read_files.items():
+            src_ep = extract_episode_info(src_name)
+            if src_ep == dest_ep:
+                return src_size
+    
+    # No match found
+    return None
 
 def should_ignore_file(filepath):
     """Check if file should be ignored"""
@@ -410,11 +457,38 @@ def main():
     if args.debug:
         for pid in pids:
             print(f"\nDebug: Scanning /proc/{pid}/fd/...")
+            
+            # Show ALL file descriptors first
+            fd_dir = Path(f"/proc/{pid}/fd")
+            fdinfo_dir = Path(f"/proc/{pid}/fdinfo")
+            
+            print("\nAll file descriptors:")
+            for fd_link in fd_dir.iterdir():
+                try:
+                    fd = fd_link.name
+                    filepath = fd_link.resolve()
+                    
+                    if not filepath.is_file():
+                        continue
+                    
+                    fdinfo_path = fdinfo_dir / fd
+                    if fdinfo_path.exists():
+                        with open(fdinfo_path, 'r') as f:
+                            lines = [l.strip() for l in f.readlines()[:5]]
+                        
+                        print(f"\n  FD {fd}: {filepath}")
+                        print(f"    fdinfo: {'; '.join(lines)}")
+                        print(f"    Ignored: {should_ignore_file(str(filepath))}")
+                except Exception as e:
+                    print(f"  FD {fd_link.name}: Error - {e}")
+            
+            # Now show what get_open_files returns
+            print("\n" + "="*60)
             files = get_open_files(pid)
             if not files:
-                print("No files found matching criteria")
+                print("get_open_files() returned no files")
             else:
-                print(f"\nFound {len(files)} file(s) being written:")
+                print(f"\nget_open_files() found {len(files)} file(s):")
                 for key, info in files.items():
                     print(f"\n  FD {info.fd}: {info.filepath}")
                     print(f"    Position: {info.position}, Target: {info.target_size}")
