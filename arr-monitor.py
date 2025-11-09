@@ -14,6 +14,20 @@ import argparse
 import re
 from pathlib import Path
 from datetime import datetime
+from threading import Lock
+
+# Global debug log
+DEBUG_LOG_FILE = None
+DEBUG_LOG_LOCK = Lock()
+
+def debug_log(message):
+    """Write debug message to log file"""
+    if DEBUG_LOG_FILE:
+        with DEBUG_LOG_LOCK:
+            with open(DEBUG_LOG_FILE, 'a') as f:
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                f.write(f"[{timestamp}] {message}\n")
+                f.flush()
 
 # Media manager process names to auto-detect
 ARR_MANAGERS = [
@@ -35,7 +49,7 @@ class FileTransferInfo:
         self.position = position
         self.size = size
         self.target_size = target_size if target_size is not None else size
-        self.initial_target = self.target_size  # Remember the first target we saw
+        self.initial_target = self.target_size
         self.last_position = position
         self.last_time = time.time()
         self.speed = 0
@@ -49,9 +63,7 @@ class FileTransferInfo:
         actual_position = size
         
         # Only expand target if position significantly exceeds it
-        # This handles cases where target was initially wrong
-        # But don't keep expanding if we're close to the target
-        if actual_position > self.target_size * 1.1:  # 10% buffer
+        if actual_position > self.target_size * 1.1:
             self.target_size = actual_position
         
         if time_delta > 0:
@@ -69,7 +81,6 @@ class FileTransferInfo:
         """Calculate percentage complete"""
         if self.target_size > 0:
             pct = (self.position / self.target_size) * 100
-            # Cap at 100% for display purposes
             return min(pct, 100.0)
         return 0
     
@@ -113,11 +124,10 @@ def format_time(seconds):
 
 def extract_episode_info(filename):
     """Extract season/episode information from filename"""
-    # Match patterns like S01E02, s01e02, 1x02, etc.
     patterns = [
-        r'[Ss](\d+)[Ee](\d+)',  # S01E02 or s01e02
-        r'(\d+)[xX](\d+)',       # 1x02 or 1X02
-        r'[Ss]eason\s*(\d+).*[Ee]pisode\s*(\d+)',  # Season 1 Episode 2
+        r'[Ss](\d+)[Ee](\d+)',
+        r'(\d+)[xX](\d+)',
+        r'[Ss]eason\s*(\d+).*[Ee]pisode\s*(\d+)',
     ]
     
     for pattern in patterns:
@@ -131,13 +141,11 @@ def extract_episode_info(filename):
 
 def find_matching_source(dest_filename, read_files):
     """Find the best matching source file for a destination"""
-    # Try exact match first (case-insensitive)
     dest_lower = dest_filename.lower()
     for src_name, src_size in read_files.items():
         if src_name.lower() == dest_lower:
             return src_size
     
-    # Try episode matching (SxxExx)
     dest_ep = extract_episode_info(dest_filename)
     if dest_ep:
         for src_name, src_size in read_files.items():
@@ -145,7 +153,6 @@ def find_matching_source(dest_filename, read_files):
             if src_ep == dest_ep:
                 return src_size
     
-    # No match found
     return None
 
 def should_ignore_file(filepath):
@@ -165,37 +172,48 @@ def find_arr_processes():
             pass
     return found
 
-def get_open_files(pid):
+def get_open_files(pid, verbose_log=False):
     """Get files currently being written by the process"""
     open_files = {}
     read_files = {}
+    
+    if verbose_log:
+        debug_log(f"=== VERBOSE SCAN of PID {pid} ===")
     
     try:
         fd_dir = Path(f"/proc/{pid}/fd")
         fdinfo_dir = Path(f"/proc/{pid}/fdinfo")
         
         if not fd_dir.exists() or not fdinfo_dir.exists():
+            if verbose_log:
+                debug_log(f"  /proc/{pid}/fd or fdinfo does not exist")
             return {}
         
         all_fds = {}
         for fd_link in fd_dir.iterdir():
+            fd = fd_link.name
             try:
-                fd = fd_link.name
                 filepath = fd_link.resolve()
                 
-                if not filepath.is_file():
-                    continue
+                if verbose_log:
+                    debug_log(f"  FD {fd}: {filepath}")
                 
-                if should_ignore_file(str(filepath)):
+                if not filepath.is_file():
+                    if verbose_log:
+                        debug_log(f"    Skipped: not a regular file")
                     continue
                 
                 try:
                     file_size = filepath.stat().st_size
-                except (OSError, FileNotFoundError):
+                except (OSError, FileNotFoundError) as e:
+                    if verbose_log:
+                        debug_log(f"    Skipped: could not stat - {e}")
                     continue
                 
                 fdinfo_path = fdinfo_dir / fd
                 if not fdinfo_path.exists():
+                    if verbose_log:
+                        debug_log(f"    Skipped: no fdinfo")
                     continue
                 
                 position = 0
@@ -208,20 +226,29 @@ def get_open_files(pid):
                                 position = int(line.split()[1])
                             elif line.startswith('flags:'):
                                 flags = int(line.split()[1], 8)
-                except (OSError, ValueError):
+                except (OSError, ValueError) as e:
+                    if verbose_log:
+                        debug_log(f"    Skipped: could not read fdinfo - {e}")
                     continue
                 
                 access_mode = flags & 0o3
+                is_ignored = should_ignore_file(str(filepath))
                 
                 all_fds[fd] = {
                     'filepath': filepath,
                     'file_size': file_size,
                     'position': position,
                     'access_mode': access_mode,
-                    'flags': flags
+                    'flags': flags,
+                    'ignored': is_ignored
                 }
+                
+                if verbose_log:
+                    debug_log(f"    size={file_size} pos={position} flags={oct(flags)} mode={access_mode} ignored={is_ignored}")
             
-            except (PermissionError, OSError):
+            except (PermissionError, OSError) as e:
+                if verbose_log:
+                    debug_log(f"  FD {fd_link.name}: Error - {e}")
                 continue
         
         for fd, info in all_fds.items():
@@ -230,8 +257,10 @@ def get_open_files(pid):
             if access_mode == 0:
                 filename = info['filepath'].name
                 read_files[filename] = info['file_size']
+                if verbose_log:
+                    debug_log(f"  Read file: {filename} ({info['file_size']} bytes)")
             
-            elif access_mode in (1, 2):
+            elif access_mode in (1, 2) and not info['ignored']:
                 filepath = info['filepath']
                 file_size = info['file_size']
                 position = info['position']
@@ -239,17 +268,42 @@ def get_open_files(pid):
                 current_pos = file_size
                 
                 filename = filepath.name
-                target_size = read_files.get(filename, file_size)
+                target_size = find_matching_source(filename, read_files)
                 
-                if target_size == file_size and file_size < 10 * 1024 * 1024 * 1024:
-                    target_size = file_size if file_size > 0 else 1
+                match_method = "none"
+                matched_source = "none"
+                if target_size is not None:
+                    match_method = "pattern/exact"
+                    for src_name, src_size in read_files.items():
+                        if src_size == target_size:
+                            matched_source = src_name
+                            break
+                elif read_files:
+                    target_size = max(read_files.values())
+                    match_method = "largest"
+                    for src_name, src_size in read_files.items():
+                        if src_size == target_size:
+                            matched_source = src_name
+                            break
+                else:
+                    target_size = max(file_size, 1)
+                    match_method = "fallback"
+                
+                if verbose_log:
+                    debug_log(f"  Write file: {filename}")
+                    debug_log(f"    current={file_size} target={target_size} match={match_method} source={matched_source}")
+                    debug_log(f"    Available read files: {list(read_files.keys())}")
                 
                 key = f"{fd}_{filepath}"
                 open_files[key] = FileTransferInfo(fd, str(filepath), current_pos, file_size, target_size)
         
+        if verbose_log:
+            debug_log(f"  Result: {len(open_files)} writable files, {len(read_files)} read files")
         return open_files
     
-    except (PermissionError, OSError):
+    except (PermissionError, OSError) as e:
+        if verbose_log:
+            debug_log(f"  Error scanning PID {pid}: {e}")
         return {}
 
 def select_process_interactive():
@@ -289,7 +343,6 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
     """Draw the curses UI"""
     height, width = stdscr.getmaxyx()
     
-    # Clear and redraw (use erase instead of clear to avoid flicker)
     stdscr.erase()
     
     if len(pid_list) == 1:
@@ -360,12 +413,13 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
     
     stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
     
-    # Use noutrefresh + doupdate for smoother rendering
     stdscr.noutrefresh()
     curses.doupdate()
 
 def run_monitor(stdscr, pid_list):
     """Main monitoring loop with curses UI"""
+    debug_log(f"run_monitor started with PIDs: {pid_list}")
+    
     curses.start_color()
     curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
     curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLACK)
@@ -380,15 +434,20 @@ def run_monitor(stdscr, pid_list):
     
     tracked_files = {}
     last_update = time.time()
+    iteration = 0
     
     while True:
         try:
+            iteration += 1
+            
             key = stdscr.getch()
             if key == ord('q') or key == ord('Q'):
+                debug_log("User quit")
                 break
             
             active_pids = [p for p in pid_list if psutil.pid_exists(p)]
             if not active_pids:
+                debug_log("All processes exited")
                 stdscr.clear()
                 stdscr.addstr(0, 0, "All monitored processes have exited.", curses.A_BOLD)
                 stdscr.addstr(1, 0, "Press any key to exit...")
@@ -396,20 +455,40 @@ def run_monitor(stdscr, pid_list):
                 stdscr.getch()
                 break
             
+            if iteration % 10 == 1:
+                debug_log(f"=== Scan iteration {iteration} ===")
+            
             current_files = {}
+            has_writable = False
             for pid in active_pids:
-                pid_files = get_open_files(pid)
+                pid_files = get_open_files(pid, verbose_log=False)
+                if pid_files:
+                    has_writable = True
                 for key, file_info in pid_files.items():
                     current_files[(pid, key)] = file_info
             
+            if has_writable and iteration % 10 == 1:
+                debug_log("=== Writable files detected, running verbose scan ===")
+                for pid in active_pids:
+                    get_open_files(pid, verbose_log=True)
+            
+            if iteration % 10 == 1:
+                debug_log(f"Total files found across all PIDs: {len(current_files)}")
+            
             for composite_key, file_info in current_files.items():
                 if composite_key in tracked_files:
+                    old_pos = tracked_files[composite_key].position
                     tracked_files[composite_key].update(file_info.position, file_info.size)
+                    new_pos = tracked_files[composite_key].position
+                    if iteration % 10 == 1 and old_pos != new_pos:
+                        debug_log(f"  Updated: {file_info.filename} {old_pos} -> {new_pos}")
                 else:
                     tracked_files[composite_key] = file_info
+                    debug_log(f"  New file tracked: {file_info.filename} at {file_info.position}/{file_info.target_size}")
             
             keys_to_remove = [k for k in tracked_files if k not in current_files]
             for key in keys_to_remove:
+                debug_log(f"  File closed: {tracked_files[key].filename}")
                 del tracked_files[key]
             
             draw_ui(stdscr, active_pids, tracked_files, last_update)
@@ -418,12 +497,20 @@ def run_monitor(stdscr, pid_list):
             time.sleep(0.5)
         
         except KeyboardInterrupt:
+            debug_log("KeyboardInterrupt")
             break
-        except curses.error:
+        except curses.error as e:
+            if iteration % 10 == 1:
+                debug_log(f"Curses error: {e}")
             time.sleep(0.1)
             continue
+        except Exception as e:
+            debug_log(f"Unexpected error: {e}")
+            raise
 
 def main():
+    global DEBUG_LOG_FILE
+    
     parser = argparse.ArgumentParser(
         description='Monitor file write operations for *arr media managers'
     )
@@ -431,64 +518,53 @@ def main():
                        help='Process ID(s) to monitor')
     parser.add_argument('-d', '--debug', action='store_true',
                        help='Show debug information')
+    parser.add_argument('-l', '--log', type=str, default='/tmp/arr-monitor.log',
+                       help='Debug log file path (default: /tmp/arr-monitor.log)')
     
     args = parser.parse_args()
+    
+    DEBUG_LOG_FILE = args.log
+    try:
+        with open(DEBUG_LOG_FILE, 'w') as f:
+            f.write(f"=== *arr Monitor Debug Log - {datetime.now()} ===\n\n")
+        debug_log(f"Starting arr-monitor with args: {sys.argv}")
+    except Exception as e:
+        print(f"Warning: Could not create debug log at {DEBUG_LOG_FILE}: {e}")
+        DEBUG_LOG_FILE = None
     
     if args.pids:
         pids = args.pids
         for pid in pids:
             if not psutil.pid_exists(pid):
                 print(f"Error: Process {pid} does not exist")
+                debug_log(f"Error: Process {pid} does not exist")
                 return 1
         
         if len(pids) == 1:
             try:
                 proc = psutil.Process(pids[0])
                 print(f"Monitoring: {proc.name()} (PID: {pids[0]})")
+                debug_log(f"Monitoring: {proc.name()} (PID: {pids[0]})")
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 print(f"Monitoring PID: {pids[0]}")
+                debug_log(f"Monitoring PID: {pids[0]}")
         else:
             print(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
+            debug_log(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
     else:
         pids = select_process_interactive()
         if pids is None:
             return 1
+        debug_log(f"Selected PIDs: {pids}")
     
     if args.debug:
         for pid in pids:
             print(f"\nDebug: Scanning /proc/{pid}/fd/...")
-            
-            # Show ALL file descriptors first
-            fd_dir = Path(f"/proc/{pid}/fd")
-            fdinfo_dir = Path(f"/proc/{pid}/fdinfo")
-            
-            print("\nAll file descriptors:")
-            for fd_link in fd_dir.iterdir():
-                try:
-                    fd = fd_link.name
-                    filepath = fd_link.resolve()
-                    
-                    if not filepath.is_file():
-                        continue
-                    
-                    fdinfo_path = fdinfo_dir / fd
-                    if fdinfo_path.exists():
-                        with open(fdinfo_path, 'r') as f:
-                            lines = [l.strip() for l in f.readlines()[:5]]
-                        
-                        print(f"\n  FD {fd}: {filepath}")
-                        print(f"    fdinfo: {'; '.join(lines)}")
-                        print(f"    Ignored: {should_ignore_file(str(filepath))}")
-                except Exception as e:
-                    print(f"  FD {fd_link.name}: Error - {e}")
-            
-            # Now show what get_open_files returns
-            print("\n" + "="*60)
-            files = get_open_files(pid)
+            files = get_open_files(pid, verbose_log=True)
             if not files:
-                print("get_open_files() returned no files")
+                print("No files found matching criteria")
             else:
-                print(f"\nget_open_files() found {len(files)} file(s):")
+                print(f"\nFound {len(files)} file(s) being written:")
                 for key, info in files.items():
                     print(f"\n  FD {info.fd}: {info.filepath}")
                     print(f"    Position: {info.position}, Target: {info.target_size}")
@@ -508,10 +584,17 @@ def main():
             return 1
     
     try:
+        debug_log("Starting curses interface")
         curses.wrapper(run_monitor, pids)
+        debug_log("Curses interface exited normally")
     except KeyboardInterrupt:
+        debug_log("Interrupted by user")
         pass
+    except Exception as e:
+        debug_log(f"Error in curses interface: {e}")
+        raise
     
+    debug_log("Exiting")
     return 0
 
 if __name__ == '__main__':
