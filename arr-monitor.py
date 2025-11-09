@@ -518,19 +518,21 @@ def main():
                        help='Process ID(s) to monitor')
     parser.add_argument('-d', '--debug', action='store_true',
                        help='Show debug information')
-    parser.add_argument('-l', '--log', type=str, default='/tmp/arr-monitor.log',
-                       help='Debug log file path (default: /tmp/arr-monitor.log)')
+    parser.add_argument('--log', type=str, metavar='FILE',
+                       help='Enable debug logging to specified file')
     
     args = parser.parse_args()
     
-    DEBUG_LOG_FILE = args.log
-    try:
-        with open(DEBUG_LOG_FILE, 'w') as f:
-            f.write(f"=== *arr Monitor Debug Log - {datetime.now()} ===\n\n")
-        debug_log(f"Starting arr-monitor with args: {sys.argv}")
-    except Exception as e:
-        print(f"Warning: Could not create debug log at {DEBUG_LOG_FILE}: {e}")
-        DEBUG_LOG_FILE = None
+    # Only enable logging if --log is specified
+    if args.log:
+        DEBUG_LOG_FILE = args.log
+        try:
+            with open(DEBUG_LOG_FILE, 'w') as f:
+                f.write(f"=== *arr Monitor Debug Log - {datetime.now()} ===\n\n")
+            debug_log(f"Starting arr-monitor with args: {sys.argv}")
+        except Exception as e:
+            print(f"Warning: Could not create debug log at {DEBUG_LOG_FILE}: {e}")
+            DEBUG_LOG_FILE = None
     
     if args.pids:
         pids = args.pids
