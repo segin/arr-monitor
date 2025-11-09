@@ -11,5 +11,6 @@
 ## System Requirements
 
  * Linux
- * Python
+ * `procps` virtual filesystem mounted at `/proc`
+ * Python 3.x
  * `psutil` library
