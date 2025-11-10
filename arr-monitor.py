@@ -16,6 +16,13 @@ from pathlib import Path
 from datetime import datetime
 from threading import Lock
 
+# Try to import wcwidth for proper double-width character handling
+try:
+    from wcwidth import wcswidth
+    HAS_WCWIDTH = True
+except ImportError:
+    HAS_WCWIDTH = False
+
 # Global debug log
 DEBUG_LOG_FILE = None
 DEBUG_LOG_LOCK = Lock()
@@ -43,9 +50,10 @@ IGNORE_EXTENSIONS = {
 
 class FileTransferInfo:
     """Tracks information about a file being written"""
-    def __init__(self, fd, filepath, position, size, target_size=None):
+    def __init__(self, fd, filepath, position, size, target_size=None, source_filepath=None):
         self.fd = fd
         self.filepath = filepath
+        self.source_filepath = source_filepath  # Store the source file path
         self.position = position
         self.size = size
         self.target_size = target_size if target_size is not None else size
@@ -155,6 +163,45 @@ def find_matching_source(dest_filename, read_files):
     
     return None
 
+def abbreviate_path(path_str, max_width):
+    """Abbreviate a path to fit within max_width characters
+    
+    Automatically uses wcwidth library if available for proper double-width
+    character support (CJK, emoji, etc.). Falls back to simple character
+    counting for ASCII/Latin text.
+    """
+    if HAS_WCWIDTH:
+        # Use proper display width calculation
+        actual_width = wcswidth(path_str)
+        if actual_width < 0:  # Contains non-printable characters
+            actual_width = len(path_str)
+        
+        if actual_width <= max_width:
+            return path_str
+        
+        # Progressively shorten from the start until it fits
+        if max_width <= 3:
+            return "..."
+        
+        # Try to show the end of the path (filename is most important)
+        for i in range(len(path_str)):
+            truncated = "..." + path_str[i:]
+            trunc_width = wcswidth(truncated)
+            if trunc_width < 0:
+                trunc_width = len(truncated)
+            if trunc_width <= max_width:
+                return truncated
+        
+        return "..."
+    else:
+        # Fallback: simple character counting (works for ASCII/Latin)
+        if len(path_str) <= max_width:
+            return path_str
+        
+        if max_width > 3:
+            return "..." + path_str[-(max_width-3):]
+        return path_str[:max_width]
+
 def should_ignore_file(filepath):
     """Check if file should be ignored"""
     path = Path(filepath)
@@ -256,7 +303,8 @@ def get_open_files(pid, verbose_log=False):
             
             if access_mode == 0:
                 filename = info['filepath'].name
-                read_files[filename] = info['file_size']
+                # Store full path for read files
+                read_files[filename] = (info['file_size'], str(info['filepath']))
                 if verbose_log:
                     debug_log(f"  Read file: {filename} ({info['file_size']} bytes)")
             
@@ -268,22 +316,27 @@ def get_open_files(pid, verbose_log=False):
                 current_pos = file_size
                 
                 filename = filepath.name
-                target_size = find_matching_source(filename, read_files)
+                match_result = find_matching_source(filename, {k: v[0] for k, v in read_files.items()})
                 
+                target_size = match_result
+                source_path = None
                 match_method = "none"
                 matched_source = "none"
+                
                 if target_size is not None:
                     match_method = "pattern/exact"
-                    for src_name, src_size in read_files.items():
+                    for src_name, (src_size, src_path) in read_files.items():
                         if src_size == target_size:
                             matched_source = src_name
+                            source_path = src_path
                             break
                 elif read_files:
-                    target_size = max(read_files.values())
+                    target_size = max(v[0] for v in read_files.values())
                     match_method = "largest"
-                    for src_name, src_size in read_files.items():
+                    for src_name, (src_size, src_path) in read_files.items():
                         if src_size == target_size:
                             matched_source = src_name
+                            source_path = src_path
                             break
                 else:
                     target_size = max(file_size, 1)
@@ -295,7 +348,7 @@ def get_open_files(pid, verbose_log=False):
                     debug_log(f"    Available read files: {list(read_files.keys())}")
                 
                 key = f"{fd}_{filepath}"
-                open_files[key] = FileTransferInfo(fd, str(filepath), current_pos, file_size, target_size)
+                open_files[key] = FileTransferInfo(fd, str(filepath), current_pos, file_size, target_size, source_path)
         
         if verbose_log:
             debug_log(f"  Result: {len(open_files)} writable files, {len(read_files)} read files")
@@ -377,9 +430,16 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
         except:
             prefix = f"[PID {pid}] "
         
-        filename = prefix + file_info.filename
-        if len(filename) > width - 1:
-            filename = filename[:width-4] + "..."
+        # Source filename in red (if available)
+        if file_info.source_filepath:
+            source_file = abbreviate_path(file_info.source_filepath, width - 1)
+            stdscr.addstr(row, 0, source_file, curses.color_pair(8))  # Red
+            row += 1
+        
+        # Destination filename in blue with process prefix
+        dest_file = prefix + abbreviate_path(file_info.filepath, width - len(prefix) - 1)
+        stdscr.addstr(row, 0, dest_file, curses.color_pair(5))  # Blue
+        row += 14] + "..."
         stdscr.addstr(row, 0, filename, curses.A_BOLD | curses.color_pair(4))
         row += 1
         
@@ -428,6 +488,7 @@ def run_monitor(stdscr, pid_list):
     curses.init_pair(5, curses.COLOR_BLUE, curses.COLOR_BLACK)
     curses.init_pair(6, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
     curses.init_pair(7, curses.COLOR_CYAN, curses.COLOR_BLACK)
+    curses.init_pair(8, curses.COLOR_RED, curses.COLOR_BLACK)
     
     stdscr.nodelay(True)
     curses.curs_set(0)
