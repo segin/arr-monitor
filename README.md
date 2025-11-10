@@ -6,7 +6,9 @@
 
 ## Getting Started
 
-`arr-monitor` comes as a single Python script, `arr-monitor.py`. Place it in your `$PATH` and run it. 
+`arr-monitor` comes as a single Python script, `arr-monitor.py`. Place it in your `$PATH` and run it.
+
+You will need to either run `arr-monitor` as root, or a user with the `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` capabilities granted.
 
 ## System Requirements
 
