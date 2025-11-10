@@ -10,9 +10,13 @@
 
 You will need to either run `arr-monitor` as root or as a user with the `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` capabilities granted.
 
+Unicode filenames with double-width characters may cause display issues if you do not have the `wcwidth` library installed. 
+
 ## System Requirements
 
  * Linux
  * `procps` virtual filesystem mounted at `/proc`
  * Python 3.x
  * `psutil` library
+### Optional:
+ * `wcwidth`
