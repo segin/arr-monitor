@@ -426,27 +426,25 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
         
         try:
             proc = psutil.Process(pid)
-            prefix = f"[{proc.name()}] "
+            proc_name = proc.name()
         except:
-            prefix = f"[PID {pid}] "
+            proc_name = f"PID {pid}"
         
-        # Source filename in red (if available)
-        if file_info.source_filepath:
-            source_file = abbreviate_path(file_info.source_filepath, width - 1)
-            stdscr.addstr(row, 0, source_file, curses.color_pair(8))  # Red
-            row += 1
-        
-        # Destination filename in blue with process prefix
-        dest_file = prefix + abbreviate_path(file_info.filepath, width - len(prefix) - 1)
-        stdscr.addstr(row, 0, dest_file, curses.color_pair(5))  # Blue
-        row += 14] + "..."
-        stdscr.addstr(row, 0, filename, curses.A_BOLD | curses.color_pair(4))
+        # Green line: [ProcessName] filename
+        filename = os.path.basename(file_info.filepath)
+        header = f"[{proc_name}] {filename}"
+        stdscr.addstr(row, 0, header[:width-1], curses.A_BOLD | curses.color_pair(4))  # Green
         row += 1
         
-        filepath = f"  {file_info.filepath}"
-        if len(filepath) > width - 1:
-            filepath = filepath[:width-4] + "..."
-        stdscr.addstr(row, 0, filepath, curses.color_pair(5))
+        # Red line: source path (indented by 2)
+        if file_info.source_filepath:
+            source_display = "  " + abbreviate_path(file_info.source_filepath, width - 3)
+            stdscr.addstr(row, 0, source_display, curses.color_pair(8))  # Red
+            row += 1
+        
+        # Blue line: destination path (indented by 2)
+        dest_display = "  " + abbreviate_path(file_info.filepath, width - 3)
+        stdscr.addstr(row, 0, dest_display, curses.color_pair(5))  # Blue
         row += 1
         
         bar_width = min(40, width - 20)
