@@ -579,6 +579,8 @@ def main():
                        help='Show debug information')
     parser.add_argument('--log', type=str, metavar='FILE',
                        help='Enable debug logging to specified file')
+    parser.add_argument('--all', action='store_true',
+                       help='Automatically monitor all detected *arr processes')
     
     args = parser.parse_args()
     
@@ -612,6 +614,17 @@ def main():
         else:
             print(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
             debug_log(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
+    elif args.all:
+        processes = find_arr_processes()
+        if not processes:
+            print("No *arr processes found running.")
+            print(f"\nAvailable managers: {', '.join(ARR_MANAGERS)}")
+            return 1
+        pids = [pid for pid, name in processes]
+        print(f"Auto-detected {len(pids)} process(es):")
+        for pid, name in processes:
+            print(f"  - {name} (PID: {pid})")
+        debug_log(f"Auto-detected PIDs with --all: {pids}")
     else:
         pids = select_process_interactive()
         if pids is None:
