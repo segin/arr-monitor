@@ -571,7 +571,14 @@ def main():
     global DEBUG_LOG_FILE
     
     parser = argparse.ArgumentParser(
-        description='Monitor file write operations for *arr media managers'
+        description='Monitor file write operations for *arr media managers',
+        epilog='Examples:\n'
+               '  %(prog)s              # Interactive process selection\n'
+               '  %(prog)s --all        # Monitor all detected *arr processes\n'
+               '  %(prog)s 1234         # Monitor specific PID\n'
+               '  %(prog)s 1234 5678    # Monitor multiple PIDs\n'
+               '  %(prog)s --debug 1234 # Show debug info for PID',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('pids', type=int, nargs='*', 
                        help='Process ID(s) to monitor')
