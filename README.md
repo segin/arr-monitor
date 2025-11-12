@@ -49,6 +49,14 @@ Found 3 *arr process(es):
 Select process to monitor [1-3/A]:
 ```
 
+### When running
+
+The *arr working the file, and the destination filename will be shown in green.
+
+The source file path will be shown in red below that, and the destination file path below that in blue.
+
+Long paths will have the beginning of the path truncated off, see the screenshot at the beginning of this README.
+
 ## System Requirements
 
  * Linux
