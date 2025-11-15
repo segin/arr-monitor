@@ -30,18 +30,35 @@ try:
 except ImportError:
     HAS_WCWIDTH = False
 
-# Global debug log
-DEBUG_LOG_FILE = None
-DEBUG_LOG_LOCK = Lock()
+class DebugLogger:
+    """Thread-safe debug logger"""
+    def __init__(self):
+        self.log_file = None
+        self.lock = Lock()
+    
+    def set_log_file(self, filepath):
+        """Set the log file path"""
+        self.log_file = filepath
+    
+    def log(self, message):
+        """Write debug message to log file"""
+        if self.log_file:
+            with self.lock:
+                try:
+                    with open(self.log_file, 'a') as f:
+                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                        f.write(f"[{timestamp}] {message}\n")
+                        f.flush()
+                except OSError:
+                    # Silently ignore logging errors
+                    pass
+
+# Global debug logger instance
+_debug_logger = DebugLogger()
 
 def debug_log(message):
     """Write debug message to log file"""
-    if DEBUG_LOG_FILE:
-        with DEBUG_LOG_LOCK:
-            with open(DEBUG_LOG_FILE, 'a') as f:
-                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                f.write(f"[{timestamp}] {message}\n")
-                f.flush()
+    _debug_logger.log(message)
 
 # Media manager process names to auto-detect
 ARR_MANAGERS = [
@@ -54,6 +71,20 @@ IGNORE_EXTENSIONS = {
     '.db', '.db-wal', '.db-shm', '.db-journal',
     '.log', '.txt', '.xml', '.json', '.conf'
 }
+
+# Constants for configuration
+POLL_INTERVAL_SECONDS = 0.5
+VERBOSE_LOG_INTERVAL = 100  # Log verbosely every N iterations
+TARGET_SIZE_EXPANSION_THRESHOLD = 1.1  # Expand target size if file exceeds by this factor
+MIN_PROGRESS_BAR_WIDTH = 40
+PROGRESS_BAR_PADDING = 20
+MIN_TERMINAL_HEIGHT = 5
+MIN_TERMINAL_WIDTH = 20
+
+# File access modes from open() flags
+ACCESS_MODE_READ = 0
+ACCESS_MODE_WRITE = 1
+ACCESS_MODE_READWRITE = 2
 
 class FileTransferInfo:
     """Tracks information about a file being written"""
@@ -78,7 +109,7 @@ class FileTransferInfo:
         actual_position = size
         
         # Only expand target if position significantly exceeds it
-        if actual_position > self.target_size * 1.1:
+        if actual_position > self.target_size * TARGET_SIZE_EXPANSION_THRESHOLD:
             self.target_size = actual_position
         
         if time_delta > 0:
@@ -138,11 +169,20 @@ def format_time(seconds):
     return f"{minutes}:{secs:02d}"
 
 def extract_episode_info(filename):
-    """Extract season/episode information from filename"""
+    """Extract season/episode information from filename
+    
+    Supports common TV episode naming patterns:
+    - S01E05 or s01e05 (standard format)
+    - 1x05 (alternate format)
+    - Season 1 Episode 5 (verbose format)
+    
+    Returns:
+        Tuple of (season, episode) as integers, or None if no match
+    """
     patterns = [
-        r'[Ss](\d+)[Ee](\d+)',
-        r'(\d+)[xX](\d+)',
-        r'[Ss]eason\s*(\d+).*[Ee]pisode\s*(\d+)',
+        r'[Ss](\d+)[Ee](\d+)',  # S01E05
+        r'(\d+)[xX](\d+)',  # 1x05
+        r'[Ss]eason\s*(\d+).*[Ee]pisode\s*(\d+)',  # Season 1 Episode 5
     ]
     
     for pattern in patterns:
@@ -318,21 +358,21 @@ def get_open_files(pid, verbose_log=False, episode_cache=None):
                         debug_log(f"    Skipped: could not read fdinfo - {e}")
                     continue
                 
-                # Access mode: 0=read, 1=write, 2=read-write
+                # Extract access mode from flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
                 access_mode = flags & 0o3
                 
                 if verbose_log:
                     debug_log(f"    size={file_size} pos={position} flags={oct(flags)} mode={access_mode}")
                 
                 # Categorize immediately
-                if access_mode == 0:
+                if access_mode == ACCESS_MODE_READ:
                     # Read file
                     filename = filepath.name
                     read_files[filename] = (file_size, str(filepath))
                     if verbose_log:
                         debug_log(f"  Read file: {filename} ({file_size} bytes)")
                 
-                elif access_mode in (1, 2):
+                elif access_mode in (ACCESS_MODE_WRITE, ACCESS_MODE_READWRITE):
                     # Write file - check if should be ignored
                     if should_ignore_file(str(filepath)):
                         if verbose_log:
@@ -432,7 +472,7 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
         return
     
     # Ensure minimum dimensions
-    if height < 5 or width < 20:
+    if height < MIN_TERMINAL_HEIGHT or width < MIN_TERMINAL_WIDTH:
         return
     
     try:
@@ -487,7 +527,7 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
             stdscr.addstr(row, 0, dest_display[:width-1], curses.color_pair(5))  # Blue
             row += 1
             
-            bar_width = min(40, width - 20)
+            bar_width = min(MIN_PROGRESS_BAR_WIDTH, width - PROGRESS_BAR_PADDING)
             if bar_width > 0:
                 filled = int((file_info.percent / 100) * bar_width)
                 bar = "█" * filled + "░" * (bar_width - filled)
@@ -559,9 +599,9 @@ def run_monitor(stdscr, pid_list):
                 stdscr.getch()
                 break
             
-            # Only do verbose logging on first iteration or every 100 iterations
+            # Only do verbose logging on first iteration or periodically
             # to avoid duplicate scanning overhead
-            verbose_this_iteration = (iteration == 1 or iteration % 100 == 0) and DEBUG_LOG_FILE
+            verbose_this_iteration = (iteration == 1 or iteration % VERBOSE_LOG_INTERVAL == 0) and _debug_logger.log_file
             
             if verbose_this_iteration:
                 debug_log(f"=== Scan iteration {iteration} ===")
@@ -594,7 +634,7 @@ def run_monitor(stdscr, pid_list):
             draw_ui(stdscr, active_pids, tracked_files, last_update)
             last_update = time.time()
             
-            time.sleep(0.5)
+            time.sleep(POLL_INTERVAL_SECONDS)
         
         except KeyboardInterrupt:
             debug_log("KeyboardInterrupt")
@@ -602,15 +642,13 @@ def run_monitor(stdscr, pid_list):
         except curses.error as e:
             if verbose_this_iteration:
                 debug_log(f"Curses error: {e}")
-            time.sleep(0.1)
+            time.sleep(POLL_INTERVAL_SECONDS)
             continue
         except Exception as e:
             debug_log(f"Unexpected error: {e}")
             raise
 
 def main():
-    global DEBUG_LOG_FILE
-    
     parser = argparse.ArgumentParser(
         description='Monitor file write operations for *arr media managers',
         epilog='Examples:\n'
@@ -634,14 +672,14 @@ def main():
     
     # Only enable logging if --log is specified
     if args.log:
-        DEBUG_LOG_FILE = args.log
+        _debug_logger.set_log_file(args.log)
         try:
-            with open(DEBUG_LOG_FILE, 'w') as f:
+            with open(args.log, 'w') as f:
                 f.write(f"=== *arr Monitor Debug Log - {datetime.now()} ===\n\n")
             debug_log(f"Starting arr-monitor with args: {sys.argv}")
         except Exception as e:
-            print(f"Warning: Could not create debug log at {DEBUG_LOG_FILE}: {e}")
-            DEBUG_LOG_FILE = None
+            print(f"Warning: Could not create debug log at {args.log}: {e}")
+            _debug_logger.set_log_file(None)
     
     if args.pids:
         pids = args.pids
