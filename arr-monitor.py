@@ -12,9 +12,16 @@ import curses
 import psutil
 import argparse
 import re
+import platform
 from pathlib import Path
 from datetime import datetime
 from threading import Lock
+
+# Check for Linux early
+if platform.system() != 'Linux':
+    print(f"Error: This tool requires Linux (uses /proc filesystem).", file=sys.stderr)
+    print(f"Detected OS: {platform.system()}", file=sys.stderr)
+    sys.exit(1)
 
 # Try to import wcwidth for proper double-width character handling
 try:
@@ -170,10 +177,17 @@ def abbreviate_path(path_str, max_width):
     character support (CJK, emoji, etc.). Falls back to simple character
     counting for ASCII/Latin text.
     """
+    if max_width <= 0:
+        return ""
+    
     if HAS_WCWIDTH:
         # Use proper display width calculation
-        actual_width = wcswidth(path_str)
-        if actual_width < 0:  # Contains non-printable characters
+        try:
+            actual_width = wcswidth(path_str)
+            if actual_width < 0:  # Contains non-printable characters
+                actual_width = len(path_str)
+        except (TypeError, ValueError):
+            # Fallback if wcswidth fails on unexpected input
             actual_width = len(path_str)
         
         if actual_width <= max_width:
@@ -181,13 +195,16 @@ def abbreviate_path(path_str, max_width):
         
         # Progressively shorten from the start until it fits
         if max_width <= 3:
-            return "..."
+            return "..."[:max_width]
         
         # Try to show the end of the path (filename is most important)
         for i in range(len(path_str)):
             truncated = "..." + path_str[i:]
-            trunc_width = wcswidth(truncated)
-            if trunc_width < 0:
+            try:
+                trunc_width = wcswidth(truncated)
+                if trunc_width < 0:
+                    trunc_width = len(truncated)
+            except (TypeError, ValueError):
                 trunc_width = len(truncated)
             if trunc_width <= max_width:
                 return truncated
@@ -394,85 +411,98 @@ def select_process_interactive():
 
 def draw_ui(stdscr, pid_list, all_files, last_update):
     """Draw the curses UI"""
-    height, width = stdscr.getmaxyx()
-    
-    stdscr.erase()
-    
-    if len(pid_list) == 1:
-        try:
-            proc = psutil.Process(pid_list[0])
-            proc_name = f"{proc.name()} (PID: {pid_list[0]})"
-        except:
-            proc_name = f"PID: {pid_list[0]}"
-    else:
-        proc_name = f"Monitoring {len(pid_list)} processes"
-    
-    header = f"*arr File Transfer Monitor - {proc_name}"
-    stdscr.addstr(0, 0, header[:width-1], curses.A_BOLD | curses.color_pair(1))
-    stdscr.addstr(1, 0, f"Time: {datetime.now().strftime('%H:%M:%S')}", curses.color_pair(2))
-    stdscr.addstr(2, 0, "─" * min(width - 1, 80))
-    
-    if not all_files:
-        stdscr.addstr(4, 0, "No active file writes detected...", curses.color_pair(3))
-        stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
-        stdscr.noutrefresh()
-        curses.doupdate()
+    try:
+        height, width = stdscr.getmaxyx()
+    except curses.error:
+        # Terminal might be in an invalid state during resize
         return
     
-    row = 4
-    for (pid, key), file_info in all_files.items():
-        if row >= height - 3:
-            break
+    # Ensure minimum dimensions
+    if height < 5 or width < 20:
+        return
+    
+    try:
+        stdscr.erase()
         
-        try:
-            proc = psutil.Process(pid)
-            proc_name = proc.name()
-        except:
-            proc_name = f"PID {pid}"
+        if len(pid_list) == 1:
+            try:
+                proc = psutil.Process(pid_list[0])
+                proc_name = f"{proc.name()} (PID: {pid_list[0]})"
+            except:
+                proc_name = f"PID: {pid_list[0]}"
+        else:
+            proc_name = f"Monitoring {len(pid_list)} processes"
         
-        # Green line: [ProcessName] filename
-        filename = os.path.basename(file_info.filepath)
-        header = f"[{proc_name}] {filename}"
-        stdscr.addstr(row, 0, header[:width-1], curses.A_BOLD | curses.color_pair(4))  # Green
-        row += 1
+        header = f"*arr File Transfer Monitor - {proc_name}"
+        stdscr.addstr(0, 0, header[:width-1], curses.A_BOLD | curses.color_pair(1))
+        stdscr.addstr(1, 0, f"Time: {datetime.now().strftime('%H:%M:%S')}", curses.color_pair(2))
+        stdscr.addstr(2, 0, "─" * min(width - 1, 80))
         
-        # Red line: source path (indented by 2)
-        if file_info.source_filepath:
-            source_display = "  " + abbreviate_path(file_info.source_filepath, width - 3)
-            stdscr.addstr(row, 0, source_display, curses.color_pair(8))  # Red
+        if not all_files:
+            stdscr.addstr(4, 0, "No active file writes detected...", curses.color_pair(3))
+            stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
+            stdscr.noutrefresh()
+            curses.doupdate()
+            return
+        
+        row = 4
+        for (pid, key), file_info in all_files.items():
+            if row >= height - 3:
+                break
+            
+            try:
+                proc = psutil.Process(pid)
+                proc_name = proc.name()
+            except:
+                proc_name = f"PID {pid}"
+            
+            # Green line: [ProcessName] filename
+            filename = os.path.basename(file_info.filepath)
+            header = f"[{proc_name}] {filename}"
+            stdscr.addstr(row, 0, header[:width-1], curses.A_BOLD | curses.color_pair(4))  # Green
             row += 1
+            
+            # Red line: source path (indented by 2)
+            if file_info.source_filepath:
+                source_display = "  " + abbreviate_path(file_info.source_filepath, width - 3)
+                stdscr.addstr(row, 0, source_display[:width-1], curses.color_pair(8))  # Red
+                row += 1
+            
+            # Blue line: destination path (indented by 2)
+            dest_display = "  " + abbreviate_path(file_info.filepath, width - 3)
+            stdscr.addstr(row, 0, dest_display[:width-1], curses.color_pair(5))  # Blue
+            row += 1
+            
+            bar_width = min(40, width - 20)
+            if bar_width > 0:
+                filled = int((file_info.percent / 100) * bar_width)
+                bar = "█" * filled + "░" * (bar_width - filled)
+                progress_str = f"  [{bar}] {file_info.percent:.1f}%"
+                stdscr.addstr(row, 0, progress_str[:width-1], curses.color_pair(6))
+            row += 1
+            
+            size_str = f"  {format_size(file_info.position)} / {format_size(file_info.target_size)}"
+            stdscr.addstr(row, 0, size_str[:width-1], curses.color_pair(2))
+            
+            if file_info.speed > 0:
+                speed_str = f"  Speed: {format_speed(file_info.speed)}"
+                eta_str = f"  ETA: {format_time(file_info.eta_seconds)}"
+                info = speed_str + eta_str
+                if len(size_str) + len(info) < width - 1:
+                    stdscr.addstr(row, len(size_str), info[:width-1-len(size_str)], curses.color_pair(7))
+            
+            row += 2
+            
+            if row >= height - 2:
+                break
         
-        # Blue line: destination path (indented by 2)
-        dest_display = "  " + abbreviate_path(file_info.filepath, width - 3)
-        stdscr.addstr(row, 0, dest_display, curses.color_pair(5))  # Blue
-        row += 1
+        stdscr.addstr(height - 1, 0, "Press 'q' to quit"[:width-1], curses.color_pair(2))
         
-        bar_width = min(40, width - 20)
-        filled = int((file_info.percent / 100) * bar_width)
-        bar = "█" * filled + "░" * (bar_width - filled)
-        progress_str = f"  [{bar}] {file_info.percent:.1f}%"
-        stdscr.addstr(row, 0, progress_str, curses.color_pair(6))
-        row += 1
-        
-        size_str = f"  {format_size(file_info.position)} / {format_size(file_info.target_size)}"
-        stdscr.addstr(row, 0, size_str, curses.color_pair(2))
-        
-        if file_info.speed > 0:
-            speed_str = f"  Speed: {format_speed(file_info.speed)}"
-            eta_str = f"  ETA: {format_time(file_info.eta_seconds)}"
-            info = speed_str + eta_str
-            if len(size_str) + len(info) < width - 1:
-                stdscr.addstr(row, len(size_str), info, curses.color_pair(7))
-        
-        row += 2
-        
-        if row >= height - 2:
-            break
-    
-    stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
-    
-    stdscr.noutrefresh()
-    curses.doupdate()
+        stdscr.noutrefresh()
+        curses.doupdate()
+    except curses.error:
+        # Silently handle curses errors during rendering (e.g., terminal resize)
+        pass
 
 def run_monitor(stdscr, pid_list):
     """Main monitoring loop with curses UI"""
