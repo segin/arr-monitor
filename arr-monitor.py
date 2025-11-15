@@ -154,18 +154,32 @@ def extract_episode_info(filename):
     
     return None
 
-def find_matching_source(dest_filename, read_files):
-    """Find the best matching source file for a destination"""
+def find_matching_source(dest_filename, read_files, episode_cache):
+    """Find the best matching source file for a destination
+    
+    Args:
+        dest_filename: Destination filename to match
+        read_files: Dict of {filename: size}
+        episode_cache: Dict to cache episode info extraction results
+    """
     dest_lower = dest_filename.lower()
+    
+    # Try exact match first (case-insensitive)
     for src_name, src_size in read_files.items():
         if src_name.lower() == dest_lower:
             return src_size
     
-    dest_ep = extract_episode_info(dest_filename)
+    # Try episode pattern matching with caching
+    if dest_filename not in episode_cache:
+        episode_cache[dest_filename] = extract_episode_info(dest_filename)
+    
+    dest_ep = episode_cache[dest_filename]
     if dest_ep:
         for src_name, src_size in read_files.items():
-            src_ep = extract_episode_info(src_name)
-            if src_ep == dest_ep:
+            if src_name not in episode_cache:
+                episode_cache[src_name] = extract_episode_info(src_name)
+            
+            if episode_cache[src_name] == dest_ep:
                 return src_size
     
     return None
@@ -236,8 +250,17 @@ def find_arr_processes():
             pass
     return found
 
-def get_open_files(pid, verbose_log=False):
-    """Get files currently being written by the process"""
+def get_open_files(pid, verbose_log=False, episode_cache=None):
+    """Get files currently being written by the process
+    
+    Args:
+        pid: Process ID to scan
+        verbose_log: Enable verbose debug logging
+        episode_cache: Optional dict to cache episode info extraction
+    """
+    if episode_cache is None:
+        episode_cache = {}
+    
     open_files = {}
     read_files = {}
     
@@ -253,7 +276,7 @@ def get_open_files(pid, verbose_log=False):
                 debug_log(f"  /proc/{pid}/fd or fdinfo does not exist")
             return {}
         
-        all_fds = {}
+        # Single pass: collect all FD info and categorize immediately
         for fd_link in fd_dir.iterdir():
             fd = fd_link.name
             try:
@@ -295,77 +318,68 @@ def get_open_files(pid, verbose_log=False):
                         debug_log(f"    Skipped: could not read fdinfo - {e}")
                     continue
                 
+                # Access mode: 0=read, 1=write, 2=read-write
                 access_mode = flags & 0o3
-                is_ignored = should_ignore_file(str(filepath))
-                
-                all_fds[fd] = {
-                    'filepath': filepath,
-                    'file_size': file_size,
-                    'position': position,
-                    'access_mode': access_mode,
-                    'flags': flags,
-                    'ignored': is_ignored
-                }
                 
                 if verbose_log:
-                    debug_log(f"    size={file_size} pos={position} flags={oct(flags)} mode={access_mode} ignored={is_ignored}")
+                    debug_log(f"    size={file_size} pos={position} flags={oct(flags)} mode={access_mode}")
+                
+                # Categorize immediately
+                if access_mode == 0:
+                    # Read file
+                    filename = filepath.name
+                    read_files[filename] = (file_size, str(filepath))
+                    if verbose_log:
+                        debug_log(f"  Read file: {filename} ({file_size} bytes)")
+                
+                elif access_mode in (1, 2):
+                    # Write file - check if should be ignored
+                    if should_ignore_file(str(filepath)):
+                        if verbose_log:
+                            debug_log(f"    Skipped: ignored extension")
+                        continue
+                    
+                    filename = filepath.name
+                    current_pos = file_size
+                    
+                    # Find matching source with caching
+                    match_result = find_matching_source(filename, {k: v[0] for k, v in read_files.items()}, episode_cache)
+                    
+                    target_size = match_result
+                    source_path = None
+                    match_method = "none"
+                    matched_source = "none"
+                    
+                    if target_size is not None:
+                        match_method = "pattern/exact"
+                        for src_name, (src_size, src_path) in read_files.items():
+                            if src_size == target_size:
+                                matched_source = src_name
+                                source_path = src_path
+                                break
+                    elif read_files:
+                        target_size = max(v[0] for v in read_files.values())
+                        match_method = "largest"
+                        for src_name, (src_size, src_path) in read_files.items():
+                            if src_size == target_size:
+                                matched_source = src_name
+                                source_path = src_path
+                                break
+                    else:
+                        target_size = max(file_size, 1)
+                        match_method = "fallback"
+                    
+                    if verbose_log:
+                        debug_log(f"  Write file: {filename}")
+                        debug_log(f"    current={file_size} target={target_size} match={match_method} source={matched_source}")
+                    
+                    key = f"{fd}_{filepath}"
+                    open_files[key] = FileTransferInfo(fd, str(filepath), current_pos, file_size, target_size, source_path)
             
             except (PermissionError, OSError) as e:
                 if verbose_log:
                     debug_log(f"  FD {fd_link.name}: Error - {e}")
                 continue
-        
-        for fd, info in all_fds.items():
-            access_mode = info['access_mode']
-            
-            if access_mode == 0:
-                filename = info['filepath'].name
-                # Store full path for read files
-                read_files[filename] = (info['file_size'], str(info['filepath']))
-                if verbose_log:
-                    debug_log(f"  Read file: {filename} ({info['file_size']} bytes)")
-            
-            elif access_mode in (1, 2) and not info['ignored']:
-                filepath = info['filepath']
-                file_size = info['file_size']
-                position = info['position']
-                
-                current_pos = file_size
-                
-                filename = filepath.name
-                match_result = find_matching_source(filename, {k: v[0] for k, v in read_files.items()})
-                
-                target_size = match_result
-                source_path = None
-                match_method = "none"
-                matched_source = "none"
-                
-                if target_size is not None:
-                    match_method = "pattern/exact"
-                    for src_name, (src_size, src_path) in read_files.items():
-                        if src_size == target_size:
-                            matched_source = src_name
-                            source_path = src_path
-                            break
-                elif read_files:
-                    target_size = max(v[0] for v in read_files.values())
-                    match_method = "largest"
-                    for src_name, (src_size, src_path) in read_files.items():
-                        if src_size == target_size:
-                            matched_source = src_name
-                            source_path = src_path
-                            break
-                else:
-                    target_size = max(file_size, 1)
-                    match_method = "fallback"
-                
-                if verbose_log:
-                    debug_log(f"  Write file: {filename}")
-                    debug_log(f"    current={file_size} target={target_size} match={match_method} source={matched_source}")
-                    debug_log(f"    Available read files: {list(read_files.keys())}")
-                
-                key = f"{fd}_{filepath}"
-                open_files[key] = FileTransferInfo(fd, str(filepath), current_pos, file_size, target_size, source_path)
         
         if verbose_log:
             debug_log(f"  Result: {len(open_files)} writable files, {len(read_files)} read files")
@@ -524,6 +538,7 @@ def run_monitor(stdscr, pid_list):
     tracked_files = {}
     last_update = time.time()
     iteration = 0
+    episode_cache = {}  # Cache for episode info extraction
     
     while True:
         try:
@@ -544,24 +559,20 @@ def run_monitor(stdscr, pid_list):
                 stdscr.getch()
                 break
             
-            if iteration % 10 == 1:
+            # Only do verbose logging on first iteration or every 100 iterations
+            # to avoid duplicate scanning overhead
+            verbose_this_iteration = (iteration == 1 or iteration % 100 == 0) and DEBUG_LOG_FILE
+            
+            if verbose_this_iteration:
                 debug_log(f"=== Scan iteration {iteration} ===")
             
             current_files = {}
-            has_writable = False
             for pid in active_pids:
-                pid_files = get_open_files(pid, verbose_log=False)
-                if pid_files:
-                    has_writable = True
+                pid_files = get_open_files(pid, verbose_log=verbose_this_iteration, episode_cache=episode_cache)
                 for key, file_info in pid_files.items():
                     current_files[(pid, key)] = file_info
             
-            if has_writable and iteration % 10 == 1:
-                debug_log("=== Writable files detected, running verbose scan ===")
-                for pid in active_pids:
-                    get_open_files(pid, verbose_log=True)
-            
-            if iteration % 10 == 1:
+            if verbose_this_iteration:
                 debug_log(f"Total files found across all PIDs: {len(current_files)}")
             
             for composite_key, file_info in current_files.items():
@@ -569,7 +580,7 @@ def run_monitor(stdscr, pid_list):
                     old_pos = tracked_files[composite_key].position
                     tracked_files[composite_key].update(file_info.position, file_info.size)
                     new_pos = tracked_files[composite_key].position
-                    if iteration % 10 == 1 and old_pos != new_pos:
+                    if verbose_this_iteration and old_pos != new_pos:
                         debug_log(f"  Updated: {file_info.filename} {old_pos} -> {new_pos}")
                 else:
                     tracked_files[composite_key] = file_info
@@ -589,7 +600,7 @@ def run_monitor(stdscr, pid_list):
             debug_log("KeyboardInterrupt")
             break
         except curses.error as e:
-            if iteration % 10 == 1:
+            if verbose_this_iteration:
                 debug_log(f"Curses error: {e}")
             time.sleep(0.1)
             continue
