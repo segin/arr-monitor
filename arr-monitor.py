@@ -95,6 +95,7 @@ MIN_PROGRESS_BAR_WIDTH = 40
 PROGRESS_BAR_PADDING = 20
 MIN_TERMINAL_HEIGHT = 5
 MIN_TERMINAL_WIDTH = 20
+EPISODE_CACHE_MAX_SIZE = 1000  # Maximum entries in episode cache before clearing
 
 # File access modes from open() flags
 ACCESS_MODE_READ = 0
@@ -630,6 +631,12 @@ def run_monitor(stdscr, pid_list, logger=None):
             
             if verbose_this_iteration:
                 logger.log(f"=== Scan iteration {iteration} ===")
+            
+            # Clear episode cache if it grows too large to prevent unbounded memory growth
+            if len(episode_cache) > EPISODE_CACHE_MAX_SIZE:
+                if logger:
+                    logger.log(f"Episode cache size {len(episode_cache)} exceeded limit, clearing")
+                episode_cache.clear()
             
             current_files = {}
             for pid in active_pids:
