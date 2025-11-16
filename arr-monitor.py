@@ -337,27 +337,30 @@ def get_open_files(pid, logger=None, verbose_log=False, episode_cache=None):
         for fd_link in fd_dir.iterdir():
             fd = fd_link.name
             try:
+                # Check fdinfo exists early before expensive operations
+                fdinfo_path = fdinfo_dir / fd
+                if not fdinfo_path.exists():
+                    if verbose_log and logger:
+                        logger.log(f"  FD {fd}: Skipped - no fdinfo")
+                    continue
+                
                 filepath = fd_link.resolve()
                 
                 if verbose_log and logger:
                     logger.log(f"  FD {fd}: {filepath}")
                 
+                # Check if regular file before stat
                 if not filepath.is_file():
                     if verbose_log and logger:
                         logger.log(f"    Skipped: not a regular file")
                     continue
                 
+                # Get file size - fail fast if not accessible
                 try:
                     file_size = filepath.stat().st_size
                 except (OSError, FileNotFoundError) as e:
                     if verbose_log and logger:
                         logger.log(f"    Skipped: could not stat - {e}")
-                    continue
-                
-                fdinfo_path = fdinfo_dir / fd
-                if not fdinfo_path.exists():
-                    if verbose_log and logger:
-                        logger.log(f"    Skipped: no fdinfo")
                     continue
                 
                 position = 0
