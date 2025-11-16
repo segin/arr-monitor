@@ -483,8 +483,18 @@ def select_process_interactive():
         except (ValueError, KeyboardInterrupt):
             return None
 
-def draw_ui(stdscr, pid_list, all_files, last_update):
-    """Draw the curses UI"""
+def draw_ui(stdscr, pid_list, all_files, last_update, path_cache=None):
+    """Draw the curses UI
+    
+    Args:
+        stdscr: Curses screen object
+        pid_list: List of process IDs being monitored
+        all_files: Dictionary of tracked file transfers
+        last_update: Timestamp of last update
+        path_cache: Optional dict to cache abbreviated paths
+    """
+    if path_cache is None:
+        path_cache = {}
     try:
         height, width = stdscr.getmaxyx()
     except curses.error:
@@ -538,12 +548,18 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
             
             # Red line: source path (indented by 2)
             if file_info.source_filepath:
-                source_display = "  " + abbreviate_path(file_info.source_filepath, width - 3)
+                cache_key = (file_info.source_filepath, width - 3)
+                if cache_key not in path_cache:
+                    path_cache[cache_key] = abbreviate_path(file_info.source_filepath, width - 3)
+                source_display = "  " + path_cache[cache_key]
                 stdscr.addstr(row, 0, source_display[:width-1], curses.color_pair(8))  # Red
                 row += 1
             
             # Blue line: destination path (indented by 2)
-            dest_display = "  " + abbreviate_path(file_info.filepath, width - 3)
+            cache_key = (file_info.filepath, width - 3)
+            if cache_key not in path_cache:
+                path_cache[cache_key] = abbreviate_path(file_info.filepath, width - 3)
+            dest_display = "  " + path_cache[cache_key]
             stdscr.addstr(row, 0, dest_display[:width-1], curses.color_pair(5))  # Blue
             row += 1
             
@@ -606,6 +622,8 @@ def run_monitor(stdscr, pid_list, logger=None):
     last_update = time.time()
     iteration = 0
     episode_cache = {}  # Cache for episode info extraction
+    path_abbreviation_cache = {}  # Cache for abbreviated paths: (path, width) -> abbreviated_path
+    last_terminal_width = 0  # Track terminal width to detect resizes
     
     while True:
         try:
@@ -668,7 +686,18 @@ def run_monitor(stdscr, pid_list, logger=None):
                     logger.log(f"  File closed: {tracked_files[key].filename}")
                 del tracked_files[key]
             
-            draw_ui(stdscr, active_pids, tracked_files, last_update)
+            # Clear path cache on terminal resize to avoid stale cached widths
+            try:
+                current_width = stdscr.getmaxyx()[1]
+                if current_width != last_terminal_width:
+                    path_abbreviation_cache.clear()
+                    last_terminal_width = current_width
+                    if logger and verbose_this_iteration:
+                        logger.log(f"Terminal width changed to {current_width}, cleared path cache")
+            except curses.error:
+                pass
+            
+            draw_ui(stdscr, active_pids, tracked_files, last_update, path_abbreviation_cache)
             last_update = time.time()
             
             time.sleep(POLL_INTERVAL_SECONDS)
