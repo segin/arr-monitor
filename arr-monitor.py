@@ -31,34 +31,49 @@ except ImportError:
     HAS_WCWIDTH = False
 
 class DebugLogger:
-    """Thread-safe debug logger"""
-    def __init__(self):
-        self.log_file = None
+    """Thread-safe debug logger with context manager support"""
+    def __init__(self, filepath=None):
+        self.filepath = filepath
+        self.file_handle = None
         self.lock = Lock()
     
-    def set_log_file(self, filepath):
-        """Set the log file path"""
-        self.log_file = filepath
+    def __enter__(self):
+        """Open log file when entering context"""
+        if self.filepath:
+            try:
+                self.file_handle = open(self.filepath, 'w')
+                self.file_handle.write(f"=== *arr Monitor Debug Log - {datetime.now()} ===\n\n")
+                self.file_handle.flush()
+            except OSError as e:
+                print(f"Warning: Could not create debug log at {self.filepath}: {e}")
+                self.file_handle = None
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Close log file when exiting context"""
+        if self.file_handle:
+            try:
+                self.file_handle.close()
+            except OSError:
+                pass
+        return False
     
     def log(self, message):
         """Write debug message to log file"""
-        if self.log_file:
+        if self.file_handle:
             with self.lock:
                 try:
-                    with open(self.log_file, 'a') as f:
-                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                        f.write(f"[{timestamp}] {message}\n")
-                        f.flush()
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    self.file_handle.write(f"[{timestamp}] {message}\n")
+                    self.file_handle.flush()
                 except OSError:
                     # Silently ignore logging errors
                     pass
-
-# Global debug logger instance
-_debug_logger = DebugLogger()
-
-def debug_log(message):
-    """Write debug message to log file"""
-    _debug_logger.log(message)
+    
+    @property
+    def is_enabled(self):
+        """Check if logging is enabled"""
+        return self.file_handle is not None
 
 # Media manager process names to auto-detect
 ARR_MANAGERS = [
@@ -290,11 +305,12 @@ def find_arr_processes():
             pass
     return found
 
-def get_open_files(pid, verbose_log=False, episode_cache=None):
+def get_open_files(pid, logger=None, verbose_log=False, episode_cache=None):
     """Get files currently being written by the process
     
     Args:
         pid: Process ID to scan
+        logger: Optional DebugLogger instance
         verbose_log: Enable verbose debug logging
         episode_cache: Optional dict to cache episode info extraction
     """
@@ -304,16 +320,16 @@ def get_open_files(pid, verbose_log=False, episode_cache=None):
     open_files = {}
     read_files = {}
     
-    if verbose_log:
-        debug_log(f"=== VERBOSE SCAN of PID {pid} ===")
+    if verbose_log and logger:
+        logger.log(f"=== VERBOSE SCAN of PID {pid} ===")
     
     try:
         fd_dir = Path(f"/proc/{pid}/fd")
         fdinfo_dir = Path(f"/proc/{pid}/fdinfo")
         
         if not fd_dir.exists() or not fdinfo_dir.exists():
-            if verbose_log:
-                debug_log(f"  /proc/{pid}/fd or fdinfo does not exist")
+            if verbose_log and logger:
+                logger.log(f"  /proc/{pid}/fd or fdinfo does not exist")
             return {}
         
         # Single pass: collect all FD info and categorize immediately
@@ -322,25 +338,25 @@ def get_open_files(pid, verbose_log=False, episode_cache=None):
             try:
                 filepath = fd_link.resolve()
                 
-                if verbose_log:
-                    debug_log(f"  FD {fd}: {filepath}")
+                if verbose_log and logger:
+                    logger.log(f"  FD {fd}: {filepath}")
                 
                 if not filepath.is_file():
-                    if verbose_log:
-                        debug_log(f"    Skipped: not a regular file")
+                    if verbose_log and logger:
+                        logger.log(f"    Skipped: not a regular file")
                     continue
                 
                 try:
                     file_size = filepath.stat().st_size
                 except (OSError, FileNotFoundError) as e:
-                    if verbose_log:
-                        debug_log(f"    Skipped: could not stat - {e}")
+                    if verbose_log and logger:
+                        logger.log(f"    Skipped: could not stat - {e}")
                     continue
                 
                 fdinfo_path = fdinfo_dir / fd
                 if not fdinfo_path.exists():
-                    if verbose_log:
-                        debug_log(f"    Skipped: no fdinfo")
+                    if verbose_log and logger:
+                        logger.log(f"    Skipped: no fdinfo")
                     continue
                 
                 position = 0
@@ -354,29 +370,29 @@ def get_open_files(pid, verbose_log=False, episode_cache=None):
                             elif line.startswith('flags:'):
                                 flags = int(line.split()[1], 8)
                 except (OSError, ValueError) as e:
-                    if verbose_log:
-                        debug_log(f"    Skipped: could not read fdinfo - {e}")
+                    if verbose_log and logger:
+                        logger.log(f"    Skipped: could not read fdinfo - {e}")
                     continue
                 
                 # Extract access mode from flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
                 access_mode = flags & 0o3
                 
-                if verbose_log:
-                    debug_log(f"    size={file_size} pos={position} flags={oct(flags)} mode={access_mode}")
+                if verbose_log and logger:
+                    logger.log(f"    size={file_size} pos={position} flags={oct(flags)} mode={access_mode}")
                 
                 # Categorize immediately
                 if access_mode == ACCESS_MODE_READ:
                     # Read file
                     filename = filepath.name
                     read_files[filename] = (file_size, str(filepath))
-                    if verbose_log:
-                        debug_log(f"  Read file: {filename} ({file_size} bytes)")
+                    if verbose_log and logger:
+                        logger.log(f"  Read file: {filename} ({file_size} bytes)")
                 
                 elif access_mode in (ACCESS_MODE_WRITE, ACCESS_MODE_READWRITE):
                     # Write file - check if should be ignored
                     if should_ignore_file(str(filepath)):
-                        if verbose_log:
-                            debug_log(f"    Skipped: ignored extension")
+                        if verbose_log and logger:
+                            logger.log(f"    Skipped: ignored extension")
                         continue
                     
                     filename = filepath.name
@@ -409,25 +425,25 @@ def get_open_files(pid, verbose_log=False, episode_cache=None):
                         target_size = max(file_size, 1)
                         match_method = "fallback"
                     
-                    if verbose_log:
-                        debug_log(f"  Write file: {filename}")
-                        debug_log(f"    current={file_size} target={target_size} match={match_method} source={matched_source}")
+                    if verbose_log and logger:
+                        logger.log(f"  Write file: {filename}")
+                        logger.log(f"    current={file_size} target={target_size} match={match_method} source={matched_source}")
                     
                     key = f"{fd}_{filepath}"
                     open_files[key] = FileTransferInfo(fd, str(filepath), current_pos, file_size, target_size, source_path)
             
             except (PermissionError, OSError) as e:
-                if verbose_log:
-                    debug_log(f"  FD {fd_link.name}: Error - {e}")
+                if verbose_log and logger:
+                    logger.log(f"  FD {fd_link.name}: Error - {e}")
                 continue
         
-        if verbose_log:
-            debug_log(f"  Result: {len(open_files)} writable files, {len(read_files)} read files")
+        if verbose_log and logger:
+            logger.log(f"  Result: {len(open_files)} writable files, {len(read_files)} read files")
         return open_files
     
     except (PermissionError, OSError) as e:
-        if verbose_log:
-            debug_log(f"  Error scanning PID {pid}: {e}")
+        if verbose_log and logger:
+            logger.log(f"  Error scanning PID {pid}: {e}")
         return {}
 
 def select_process_interactive():
@@ -558,9 +574,16 @@ def draw_ui(stdscr, pid_list, all_files, last_update):
         # Silently handle curses errors during rendering (e.g., terminal resize)
         pass
 
-def run_monitor(stdscr, pid_list):
-    """Main monitoring loop with curses UI"""
-    debug_log(f"run_monitor started with PIDs: {pid_list}")
+def run_monitor(stdscr, pid_list, logger=None):
+    """Main monitoring loop with curses UI
+    
+    Args:
+        stdscr: Curses screen object
+        pid_list: List of process IDs to monitor
+        logger: Optional DebugLogger instance
+    """
+    if logger:
+        logger.log(f"run_monitor started with PIDs: {pid_list}")
     
     curses.start_color()
     curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
@@ -586,12 +609,14 @@ def run_monitor(stdscr, pid_list):
             
             key = stdscr.getch()
             if key == ord('q') or key == ord('Q'):
-                debug_log("User quit")
+                if logger:
+                    logger.log("User quit")
                 break
             
             active_pids = [p for p in pid_list if psutil.pid_exists(p)]
             if not active_pids:
-                debug_log("All processes exited")
+                if logger:
+                    logger.log("All processes exited")
                 stdscr.clear()
                 stdscr.addstr(0, 0, "All monitored processes have exited.", curses.A_BOLD)
                 stdscr.addstr(1, 0, "Press any key to exit...")
@@ -601,19 +626,19 @@ def run_monitor(stdscr, pid_list):
             
             # Only do verbose logging on first iteration or periodically
             # to avoid duplicate scanning overhead
-            verbose_this_iteration = (iteration == 1 or iteration % VERBOSE_LOG_INTERVAL == 0) and _debug_logger.log_file
+            verbose_this_iteration = (iteration == 1 or iteration % VERBOSE_LOG_INTERVAL == 0) and logger and logger.is_enabled
             
             if verbose_this_iteration:
-                debug_log(f"=== Scan iteration {iteration} ===")
+                logger.log(f"=== Scan iteration {iteration} ===")
             
             current_files = {}
             for pid in active_pids:
-                pid_files = get_open_files(pid, verbose_log=verbose_this_iteration, episode_cache=episode_cache)
+                pid_files = get_open_files(pid, logger=logger, verbose_log=verbose_this_iteration, episode_cache=episode_cache)
                 for key, file_info in pid_files.items():
                     current_files[(pid, key)] = file_info
             
             if verbose_this_iteration:
-                debug_log(f"Total files found across all PIDs: {len(current_files)}")
+                logger.log(f"Total files found across all PIDs: {len(current_files)}")
             
             for composite_key, file_info in current_files.items():
                 if composite_key in tracked_files:
@@ -621,14 +646,16 @@ def run_monitor(stdscr, pid_list):
                     tracked_files[composite_key].update(file_info.position, file_info.size)
                     new_pos = tracked_files[composite_key].position
                     if verbose_this_iteration and old_pos != new_pos:
-                        debug_log(f"  Updated: {file_info.filename} {old_pos} -> {new_pos}")
+                        logger.log(f"  Updated: {file_info.filename} {old_pos} -> {new_pos}")
                 else:
                     tracked_files[composite_key] = file_info
-                    debug_log(f"  New file tracked: {file_info.filename} at {file_info.position}/{file_info.target_size}")
+                    if logger:
+                        logger.log(f"  New file tracked: {file_info.filename} at {file_info.position}/{file_info.target_size}")
             
             keys_to_remove = [k for k in tracked_files if k not in current_files]
             for key in keys_to_remove:
-                debug_log(f"  File closed: {tracked_files[key].filename}")
+                if logger:
+                    logger.log(f"  File closed: {tracked_files[key].filename}")
                 del tracked_files[key]
             
             draw_ui(stdscr, active_pids, tracked_files, last_update)
@@ -637,15 +664,17 @@ def run_monitor(stdscr, pid_list):
             time.sleep(POLL_INTERVAL_SECONDS)
         
         except KeyboardInterrupt:
-            debug_log("KeyboardInterrupt")
+            if logger:
+                logger.log("KeyboardInterrupt")
             break
         except curses.error as e:
             if verbose_this_iteration:
-                debug_log(f"Curses error: {e}")
+                logger.log(f"Curses error: {e}")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
         except Exception as e:
-            debug_log(f"Unexpected error: {e}")
+            if logger:
+                logger.log(f"Unexpected error: {e}")
             raise
 
 def main():
@@ -670,36 +699,24 @@ def main():
     
     args = parser.parse_args()
     
-    # Only enable logging if --log is specified
-    if args.log:
-        _debug_logger.set_log_file(args.log)
-        try:
-            with open(args.log, 'w') as f:
-                f.write(f"=== *arr Monitor Debug Log - {datetime.now()} ===\n\n")
-            debug_log(f"Starting arr-monitor with args: {sys.argv}")
-        except Exception as e:
-            print(f"Warning: Could not create debug log at {args.log}: {e}")
-            _debug_logger.set_log_file(None)
+    # Create logger context manager
+    logger = DebugLogger(args.log) if args.log else DebugLogger()
     
     if args.pids:
         pids = args.pids
         for pid in pids:
             if not psutil.pid_exists(pid):
                 print(f"Error: Process {pid} does not exist")
-                debug_log(f"Error: Process {pid} does not exist")
                 return 1
         
         if len(pids) == 1:
             try:
                 proc = psutil.Process(pids[0])
                 print(f"Monitoring: {proc.name()} (PID: {pids[0]})")
-                debug_log(f"Monitoring: {proc.name()} (PID: {pids[0]})")
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 print(f"Monitoring PID: {pids[0]}")
-                debug_log(f"Monitoring PID: {pids[0]}")
         else:
             print(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
-            debug_log(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
     elif args.all:
         processes = find_arr_processes()
         if not processes:
@@ -710,12 +727,10 @@ def main():
         print(f"Auto-detected {len(pids)} process(es):")
         for pid, name in processes:
             print(f"  - {name} (PID: {pid})")
-        debug_log(f"Auto-detected PIDs with --all: {pids}")
     else:
         pids = select_process_interactive()
         if pids is None:
             return 1
-        debug_log(f"Selected PIDs: {pids}")
     
     if args.debug:
         for pid in pids:
@@ -743,18 +758,29 @@ def main():
             print(f"\nError: Process {pid} no longer exists")
             return 1
     
-    try:
-        debug_log("Starting curses interface")
-        curses.wrapper(run_monitor, pids)
-        debug_log("Curses interface exited normally")
-    except KeyboardInterrupt:
-        debug_log("Interrupted by user")
-        pass
-    except Exception as e:
-        debug_log(f"Error in curses interface: {e}")
-        raise
+    # Use logger as context manager
+    with logger:
+        if logger.is_enabled:
+            logger.log(f"Starting arr-monitor with args: {sys.argv}")
+        
+        try:
+            if logger.is_enabled:
+                logger.log("Starting curses interface")
+            curses.wrapper(run_monitor, pids, logger)
+            if logger.is_enabled:
+                logger.log("Curses interface exited normally")
+        except KeyboardInterrupt:
+            if logger.is_enabled:
+                logger.log("Interrupted by user")
+            pass
+        except Exception as e:
+            if logger.is_enabled:
+                logger.log(f"Error in curses interface: {e}")
+            raise
+        
+        if logger.is_enabled:
+            logger.log("Exiting")
     
-    debug_log("Exiting")
     return 0
 
 if __name__ == '__main__':
