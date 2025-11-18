@@ -131,7 +131,16 @@ class FileTransferInfo:
         self.first_seen = time.time()
         
     def update(self, position: int, size: int) -> None:
-        """Update position, size, and calculate speed"""
+        """Update position, size, and calculate speed
+        
+        Args:
+            position: Current file position (not used, size is used instead)
+            size: Current file size in bytes
+        """
+        # Validate inputs
+        if size < 0:
+            return  # Ignore invalid size
+        
         current_time = time.time()
         time_delta = current_time - self.last_time
         
@@ -139,8 +148,9 @@ class FileTransferInfo:
         
         # Only expand target if position significantly exceeds it
         if actual_position > self.target_size * Config.TARGET_SIZE_EXPANSION_THRESHOLD:
-            self.target_size = actual_position
+            self._expand_target_size(actual_position)
         
+        # Calculate speed only if time has passed and bytes were written
         if time_delta > 0:
             bytes_written = actual_position - self.last_position
             if bytes_written > 0:
@@ -150,6 +160,14 @@ class FileTransferInfo:
         self.position = actual_position
         self.size = size
         self.last_time = current_time
+    
+    def _expand_target_size(self, new_size: int) -> None:
+        """Expand target size when file grows beyond expected size
+        
+        Args:
+            new_size: New target size to set
+        """
+        self.target_size = new_size
     
     @property
     def percent(self) -> float:
