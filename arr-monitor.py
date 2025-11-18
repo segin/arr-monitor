@@ -353,20 +353,25 @@ def get_open_files(pid, logger=None, verbose_log=False, episode_cache=None):
                         logger.log(f"  FD {fd}: Skipped - no fdinfo")
                     continue
                 
-                filepath = fd_link.resolve()
+                # Resolve symlink with early error handling
+                try:
+                    filepath = fd_link.resolve()
+                except (OSError, RuntimeError) as e:
+                    if verbose_log and logger:
+                        logger.log(f"  FD {fd}: Skipped - could not resolve: {e}")
+                    continue
                 
                 if verbose_log and logger:
                     logger.log(f"  FD {fd}: {filepath}")
                 
-                # Check if regular file before stat
-                if not filepath.is_file():
-                    if verbose_log and logger:
-                        logger.log(f"    Skipped: not a regular file")
-                    continue
-                
-                # Get file size - fail fast if not accessible
+                # Check if regular file and get size - combined to reduce syscalls
                 try:
-                    file_size = filepath.stat().st_size
+                    stat_info = filepath.stat()
+                    if not filepath.is_file():
+                        if verbose_log and logger:
+                            logger.log(f"    Skipped: not a regular file")
+                        continue
+                    file_size = stat_info.st_size
                 except (OSError, FileNotFoundError) as e:
                     if verbose_log and logger:
                         logger.log(f"    Skipped: could not stat - {e}")
