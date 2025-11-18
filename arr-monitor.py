@@ -84,7 +84,8 @@ ARR_MANAGERS = [
 # File extensions to ignore (databases, logs, etc.)
 IGNORE_EXTENSIONS = {
     '.db', '.db-wal', '.db-shm', '.db-journal',
-    '.log', '.txt', '.xml', '.json', '.conf'
+    '.log', '.txt', '.xml', '.json', '.conf',
+    '.zip', '.dll'
 }
 
 # Constants for configuration
