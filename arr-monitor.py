@@ -88,21 +88,30 @@ IGNORE_EXTENSIONS = {
     '.zip', '.dll'
 }
 
-# Constants for configuration
-POLL_INTERVAL_SECONDS = 0.5
-VERBOSE_LOG_INTERVAL = 100  # Log verbosely every N iterations
-TARGET_SIZE_EXPANSION_THRESHOLD = 1.1  # Expand target size if file exceeds by this factor
-MIN_PROGRESS_BAR_WIDTH = 40
-PROGRESS_BAR_PADDING = 20
-MIN_TERMINAL_HEIGHT = 5
-MIN_TERMINAL_WIDTH = 20
-EPISODE_CACHE_MAX_SIZE = 1000  # Maximum entries in episode info cache
-EPISODE_CACHE_MAX_SIZE = 1000  # Maximum entries in episode cache before clearing
-
 # File access modes from open() flags
 ACCESS_MODE_READ = 0
 ACCESS_MODE_WRITE = 1
 ACCESS_MODE_READWRITE = 2
+
+# Configuration constants grouped by category
+class Config:
+    """Configuration constants for the monitor"""
+    # Polling and logging
+    POLL_INTERVAL_SECONDS = 0.5
+    VERBOSE_LOG_INTERVAL = 100  # Log verbosely every N iterations
+    
+    # File transfer tracking
+    TARGET_SIZE_EXPANSION_THRESHOLD = 1.1  # Expand target size if file exceeds by this factor
+    
+    # UI dimensions
+    MIN_PROGRESS_BAR_WIDTH = 40
+    PROGRESS_BAR_PADDING = 20
+    MIN_TERMINAL_HEIGHT = 5
+    MIN_TERMINAL_WIDTH = 20
+    
+    # Cache limits
+    EPISODE_CACHE_MAX_SIZE = 1000  # Maximum entries in episode cache before clearing
+    PATH_CACHE_MAX_SIZE = 500  # Maximum entries in path abbreviation cache
 
 class FileTransferInfo:
     """Tracks information about a file being written"""
@@ -127,7 +136,7 @@ class FileTransferInfo:
         actual_position = size
         
         # Only expand target if position significantly exceeds it
-        if actual_position > self.target_size * TARGET_SIZE_EXPANSION_THRESHOLD:
+        if actual_position > self.target_size * Config.TARGET_SIZE_EXPANSION_THRESHOLD:
             self.target_size = actual_position
         
         if time_delta > 0:
@@ -230,7 +239,7 @@ def find_matching_source(dest_filename, read_files, episode_cache):
     # Try episode pattern matching with caching
     if dest_filename not in episode_cache:
         # Enforce cache size limit using LRU-style eviction
-        if len(episode_cache) >= EPISODE_CACHE_MAX_SIZE:
+        if len(episode_cache) >= Config.EPISODE_CACHE_MAX_SIZE:
             # Remove oldest entry (first key in dict - Python 3.7+ maintains insertion order)
             episode_cache.pop(next(iter(episode_cache)))
         episode_cache[dest_filename] = extract_episode_info(dest_filename)
@@ -240,7 +249,7 @@ def find_matching_source(dest_filename, read_files, episode_cache):
         for src_name, src_size in read_files.items():
             if src_name not in episode_cache:
                 # Enforce cache size limit
-                if len(episode_cache) >= EPISODE_CACHE_MAX_SIZE:
+                if len(episode_cache) >= Config.EPISODE_CACHE_MAX_SIZE:
                     episode_cache.pop(next(iter(episode_cache)))
                 episode_cache[src_name] = extract_episode_info(src_name)
             
@@ -251,7 +260,6 @@ def find_matching_source(dest_filename, read_files, episode_cache):
 
 # Cache for abbreviated paths to avoid recalculating on every render
 _path_abbreviation_cache = {}
-PATH_CACHE_MAX_SIZE = 500  # Limit cache size
 
 def abbreviate_path(path_str, max_width):
     """Abbreviate a path to fit within max_width characters
@@ -309,7 +317,7 @@ def abbreviate_path(path_str, max_width):
             result = path_str[:max_width]
     
     # Store in cache with size limit
-    if len(_path_abbreviation_cache) >= PATH_CACHE_MAX_SIZE:
+    if len(_path_abbreviation_cache) >= Config.PATH_CACHE_MAX_SIZE:
         # Remove oldest entry (first key)
         _path_abbreviation_cache.pop(next(iter(_path_abbreviation_cache)))
     _path_abbreviation_cache[cache_key] = result
@@ -534,7 +542,7 @@ def draw_ui(stdscr, pid_list, all_files, last_update, path_cache=None):
         return
     
     # Ensure minimum dimensions
-    if height < MIN_TERMINAL_HEIGHT or width < MIN_TERMINAL_WIDTH:
+    if height < Config.MIN_TERMINAL_HEIGHT or width < Config.MIN_TERMINAL_WIDTH:
         return
     
     try:
@@ -595,7 +603,7 @@ def draw_ui(stdscr, pid_list, all_files, last_update, path_cache=None):
             stdscr.addstr(row, 0, dest_display[:width-1], curses.color_pair(5))  # Blue
             row += 1
             
-            bar_width = min(MIN_PROGRESS_BAR_WIDTH, width - PROGRESS_BAR_PADDING)
+            bar_width = min(Config.MIN_PROGRESS_BAR_WIDTH, width - Config.PROGRESS_BAR_PADDING)
             if bar_width > 0:
                 filled = int((file_info.percent / 100) * bar_width)
                 bar = "█" * filled + "░" * (bar_width - filled)
@@ -680,13 +688,13 @@ def run_monitor(stdscr, pid_list, logger=None):
             
             # Only do verbose logging on first iteration or periodically
             # to avoid duplicate scanning overhead
-            verbose_this_iteration = (iteration == 1 or iteration % VERBOSE_LOG_INTERVAL == 0) and logger and logger.is_enabled
+            verbose_this_iteration = (iteration == 1 or iteration % Config.VERBOSE_LOG_INTERVAL == 0) and logger and logger.is_enabled
             
             if verbose_this_iteration:
                 logger.log(f"=== Scan iteration {iteration} ===")
             
             # Clear episode cache if it grows too large to prevent unbounded memory growth
-            if len(episode_cache) > EPISODE_CACHE_MAX_SIZE:
+            if len(episode_cache) > Config.EPISODE_CACHE_MAX_SIZE:
                 if logger:
                     logger.log(f"Episode cache size {len(episode_cache)} exceeded limit, clearing")
                 episode_cache.clear()
@@ -732,7 +740,7 @@ def run_monitor(stdscr, pid_list, logger=None):
             draw_ui(stdscr, active_pids, tracked_files, last_update, path_abbreviation_cache)
             last_update = time.time()
             
-            time.sleep(POLL_INTERVAL_SECONDS)
+            time.sleep(Config.POLL_INTERVAL_SECONDS)
         
         except KeyboardInterrupt:
             if logger:
@@ -741,7 +749,7 @@ def run_monitor(stdscr, pid_list, logger=None):
         except curses.error as e:
             if verbose_this_iteration:
                 logger.log(f"Curses error: {e}")
-            time.sleep(POLL_INTERVAL_SECONDS)
+            time.sleep(Config.POLL_INTERVAL_SECONDS)
             continue
         except Exception as e:
             if logger:
