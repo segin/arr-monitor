@@ -432,16 +432,18 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                         logger.log(f"    Skipped: could not stat - {e}")
                     continue
                 
-                position = 0
+                # Read fdinfo to get file flags (and position for debug logging)
                 flags = 0
+                position = 0  # Only used for verbose logging
                 
                 try:
                     with open(fdinfo_path, 'r') as f:
                         for line in f:
-                            if line.startswith('pos:'):
-                                position = int(line.split()[1])
-                            elif line.startswith('flags:'):
+                            if line.startswith('flags:'):
                                 flags = int(line.split()[1], 8)
+                            elif line.startswith('pos:') and verbose_log:
+                                # Only parse position if we're going to log it
+                                position = int(line.split()[1])
                 except (OSError, ValueError) as e:
                     if verbose_log and logger:
                         logger.log(f"    Skipped: could not read fdinfo - {e}")
