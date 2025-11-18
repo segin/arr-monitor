@@ -220,6 +220,13 @@ def format_time(seconds: Optional[float]) -> str:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
 
+# Compiled regex patterns for episode info extraction (compiled once at module level)
+EPISODE_PATTERNS = [
+    re.compile(r'[Ss](\d+)[Ee](\d+)'),  # S01E05
+    re.compile(r'(\d+)[xX](\d+)'),  # 1x05
+    re.compile(r'[Ss]eason\s*(\d+).*[Ee]pisode\s*(\d+)'),  # Season 1 Episode 5
+]
+
 def extract_episode_info(filename: str) -> Optional[Tuple[int, int]]:
     """Extract season/episode information from filename
     
@@ -231,14 +238,8 @@ def extract_episode_info(filename: str) -> Optional[Tuple[int, int]]:
     Returns:
         Tuple of (season, episode) as integers, or None if no match
     """
-    patterns = [
-        r'[Ss](\d+)[Ee](\d+)',  # S01E05
-        r'(\d+)[xX](\d+)',  # 1x05
-        r'[Ss]eason\s*(\d+).*[Ee]pisode\s*(\d+)',  # Season 1 Episode 5
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, filename)
+    for pattern in EPISODE_PATTERNS:
+        match = pattern.search(filename)
         if match:
             season = int(match.group(1))
             episode = int(match.group(2))
