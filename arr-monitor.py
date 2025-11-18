@@ -249,16 +249,28 @@ def find_matching_source(dest_filename, read_files, episode_cache):
     
     return None
 
+# Cache for abbreviated paths to avoid recalculating on every render
+_path_abbreviation_cache = {}
+PATH_CACHE_MAX_SIZE = 500  # Limit cache size
+
 def abbreviate_path(path_str, max_width):
     """Abbreviate a path to fit within max_width characters
     
     Automatically uses wcwidth library if available for proper double-width
     character support (CJK, emoji, etc.). Falls back to simple character
     counting for ASCII/Latin text.
+    
+    Results are cached to improve performance during repeated renders.
     """
     if max_width <= 0:
         return ""
     
+    # Check cache first
+    cache_key = (path_str, max_width)
+    if cache_key in _path_abbreviation_cache:
+        return _path_abbreviation_cache[cache_key]
+    
+    # Calculate abbreviated path
     if HAS_WCWIDTH:
         # Use proper display width calculation
         try:
@@ -270,33 +282,39 @@ def abbreviate_path(path_str, max_width):
             actual_width = len(path_str)
         
         if actual_width <= max_width:
-            return path_str
-        
-        # Progressively shorten from the start until it fits
-        if max_width <= 3:
-            return "..."[:max_width]
-        
-        # Try to show the end of the path (filename is most important)
-        for i in range(len(path_str)):
-            truncated = "..." + path_str[i:]
-            try:
-                trunc_width = wcswidth(truncated)
-                if trunc_width < 0:
+            result = path_str
+        elif max_width <= 3:
+            result = "..."[:max_width]
+        else:
+            # Try to show the end of the path (filename is most important)
+            result = "..."
+            for i in range(len(path_str)):
+                truncated = "..." + path_str[i:]
+                try:
+                    trunc_width = wcswidth(truncated)
+                    if trunc_width < 0:
+                        trunc_width = len(truncated)
+                except (TypeError, ValueError):
                     trunc_width = len(truncated)
-            except (TypeError, ValueError):
-                trunc_width = len(truncated)
-            if trunc_width <= max_width:
-                return truncated
-        
-        return "..."
+                if trunc_width <= max_width:
+                    result = truncated
+                    break
     else:
         # Fallback: simple character counting (works for ASCII/Latin)
         if len(path_str) <= max_width:
-            return path_str
-        
-        if max_width > 3:
-            return "..." + path_str[-(max_width-3):]
-        return path_str[:max_width]
+            result = path_str
+        elif max_width > 3:
+            result = "..." + path_str[-(max_width-3):]
+        else:
+            result = path_str[:max_width]
+    
+    # Store in cache with size limit
+    if len(_path_abbreviation_cache) >= PATH_CACHE_MAX_SIZE:
+        # Remove oldest entry (first key)
+        _path_abbreviation_cache.pop(next(iter(_path_abbreviation_cache)))
+    _path_abbreviation_cache[cache_key] = result
+    
+    return result
 
 def should_ignore_file(filepath):
     """Check if file should be ignored"""
