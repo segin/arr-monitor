@@ -556,7 +556,7 @@ def select_process_interactive() -> Optional[List[int]]:
         except (ValueError, KeyboardInterrupt):
             return None
 
-def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTransferInfo], 
+def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], FileTransferInfo], 
            last_update: float, path_cache: Optional[Dict[Tuple[str, int], str]] = None,
            proc_name_cache: Optional[Dict[int, str]] = None) -> None:
     """Draw the curses UI
@@ -564,7 +564,7 @@ def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTr
     Args:
         stdscr: Curses screen object
         pid_list: List of process IDs being monitored
-        all_files: Dictionary of tracked file transfers
+        tracked_files: Dictionary of tracked file transfers
         last_update: Timestamp of last update
         path_cache: Optional dict to cache abbreviated paths
         proc_name_cache: Optional dict to cache process names
@@ -604,7 +604,7 @@ def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTr
         stdscr.addstr(1, 0, f"Time: {datetime.now().strftime('%H:%M:%S')}", curses.color_pair(2))
         stdscr.addstr(2, 0, "─" * min(width - 1, 80))
         
-        if not all_files:
+        if not tracked_files:
             stdscr.addstr(4, 0, "No active file writes detected...", curses.color_pair(3))
             stdscr.addstr(height - 1, 0, "Press 'q' to quit", curses.color_pair(2))
             stdscr.noutrefresh()
@@ -612,7 +612,7 @@ def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTr
             return
         
         row = 4
-        for (pid, key), file_info in all_files.items():
+        for (pid, file_key), file_info in tracked_files.items():
             if row >= height - 3:
                 break
             
@@ -748,29 +748,29 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
             current_files = {}
             for pid in active_pids:
                 pid_files = get_open_files(pid, logger=logger, verbose_log=verbose_this_iteration, episode_cache=episode_cache)
-                for key, file_info in pid_files.items():
-                    current_files[(pid, key)] = file_info
+                for file_key, file_info in pid_files.items():
+                    current_files[(pid, file_key)] = file_info
             
             if verbose_this_iteration:
                 logger.log(f"Total files found across all PIDs: {len(current_files)}")
             
-            for composite_key, file_info in current_files.items():
-                if composite_key in tracked_files:
-                    old_pos = tracked_files[composite_key].position
-                    tracked_files[composite_key].update(file_info.position, file_info.size)
-                    new_pos = tracked_files[composite_key].position
+            for file_key, file_info in current_files.items():
+                if file_key in tracked_files:
+                    old_pos = tracked_files[file_key].position
+                    tracked_files[file_key].update(file_info.position, file_info.size)
+                    new_pos = tracked_files[file_key].position
                     if verbose_this_iteration and old_pos != new_pos:
                         logger.log(f"  Updated: {file_info.filename} {old_pos} -> {new_pos}")
                 else:
-                    tracked_files[composite_key] = file_info
+                    tracked_files[file_key] = file_info
                     if logger:
                         logger.log(f"  New file tracked: {file_info.filename} at {file_info.position}/{file_info.target_size}")
             
             keys_to_remove = [k for k in tracked_files if k not in current_files]
-            for key in keys_to_remove:
+            for file_key in keys_to_remove:
                 if logger:
-                    logger.log(f"  File closed: {tracked_files[key].filename}")
-                del tracked_files[key]
+                    logger.log(f"  File closed: {tracked_files[file_key].filename}")
+                del tracked_files[file_key]
             
             # Handle terminal resize by clearing path cache
             # Path abbreviations are width-dependent, so we need to recalculate them
