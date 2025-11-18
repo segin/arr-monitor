@@ -808,13 +808,28 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
                 logger.log("KeyboardInterrupt")
             break
         except curses.error as e:
-            if verbose_this_iteration:
+            # Handle curses-specific errors (terminal resize, etc.)
+            if logger and verbose_this_iteration:
                 logger.log(f"Curses error: {e}")
             time.sleep(Config.POLL_INTERVAL_SECONDS)
             continue
-        except Exception as e:
+        except psutil.NoSuchProcess as e:
+            # Process disappeared during monitoring
             if logger:
-                logger.log(f"Unexpected error: {e}")
+                logger.log(f"Process no longer exists: {e}")
+            # Will be caught by active_pids check on next iteration
+            time.sleep(Config.POLL_INTERVAL_SECONDS)
+            continue
+        except (OSError, IOError) as e:
+            # File system errors (permission denied, file not found, etc.)
+            if logger:
+                logger.log(f"File system error: {e}")
+            time.sleep(Config.POLL_INTERVAL_SECONDS)
+            continue
+        except Exception as e:
+            # Unexpected errors - log and re-raise for debugging
+            if logger:
+                logger.log(f"Unexpected error: {type(e).__name__}: {e}")
             raise
 
 def main() -> int:
