@@ -547,7 +547,8 @@ def select_process_interactive() -> Optional[List[int]]:
             return None
 
 def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTransferInfo], 
-           last_update: float, path_cache: Optional[Dict[Tuple[str, int], str]] = None) -> None:
+           last_update: float, path_cache: Optional[Dict[Tuple[str, int], str]] = None,
+           proc_name_cache: Optional[Dict[int, str]] = None) -> None:
     """Draw the curses UI
     
     Args:
@@ -556,9 +557,13 @@ def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTr
         all_files: Dictionary of tracked file transfers
         last_update: Timestamp of last update
         path_cache: Optional dict to cache abbreviated paths
+        proc_name_cache: Optional dict to cache process names
     """
     if path_cache is None:
         path_cache = {}
+    if proc_name_cache is None:
+        proc_name_cache = {}
+    
     try:
         height, width = stdscr.getmaxyx()
     except curses.error:
@@ -573,11 +578,14 @@ def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTr
         stdscr.erase()
         
         if len(pid_list) == 1:
-            try:
-                proc = psutil.Process(pid_list[0])
-                proc_name = f"{proc.name()} (PID: {pid_list[0]})"
-            except:
-                proc_name = f"PID: {pid_list[0]}"
+            pid = pid_list[0]
+            if pid not in proc_name_cache:
+                try:
+                    proc = psutil.Process(pid)
+                    proc_name_cache[pid] = proc.name()
+                except:
+                    proc_name_cache[pid] = f"PID {pid}"
+            proc_name = f"{proc_name_cache[pid]} (PID: {pid})"
         else:
             proc_name = f"Monitoring {len(pid_list)} processes"
         
@@ -598,11 +606,14 @@ def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTr
             if row >= height - 3:
                 break
             
-            try:
-                proc = psutil.Process(pid)
-                proc_name = proc.name()
-            except:
-                proc_name = f"PID {pid}"
+            # Use cached process name
+            if pid not in proc_name_cache:
+                try:
+                    proc = psutil.Process(pid)
+                    proc_name_cache[pid] = proc.name()
+                except:
+                    proc_name_cache[pid] = f"PID {pid}"
+            proc_name = proc_name_cache[pid]
             
             # Green line: [ProcessName] filename
             filename = os.path.basename(file_info.filepath)
@@ -687,6 +698,7 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
     iteration = 0
     episode_cache = {}  # Cache for episode info extraction
     path_abbreviation_cache = {}  # Cache for abbreviated paths: (path, width) -> abbreviated_path
+    process_name_cache: Dict[int, str] = {}  # Cache for process names: pid -> name
     last_terminal_width = 0  # Track terminal width to detect resizes
     
     while True:
@@ -761,7 +773,7 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
             except curses.error:
                 pass
             
-            draw_ui(stdscr, active_pids, tracked_files, last_update, path_abbreviation_cache)
+            draw_ui(stdscr, active_pids, tracked_files, last_update, path_abbreviation_cache, process_name_cache)
             last_update = time.time()
             
             time.sleep(Config.POLL_INTERVAL_SECONDS)
