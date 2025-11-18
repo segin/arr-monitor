@@ -96,6 +96,7 @@ MIN_PROGRESS_BAR_WIDTH = 40
 PROGRESS_BAR_PADDING = 20
 MIN_TERMINAL_HEIGHT = 5
 MIN_TERMINAL_WIDTH = 20
+EPISODE_CACHE_MAX_SIZE = 1000  # Maximum entries in episode info cache
 EPISODE_CACHE_MAX_SIZE = 1000  # Maximum entries in episode cache before clearing
 
 # File access modes from open() flags
@@ -228,12 +229,19 @@ def find_matching_source(dest_filename, read_files, episode_cache):
     
     # Try episode pattern matching with caching
     if dest_filename not in episode_cache:
+        # Enforce cache size limit using LRU-style eviction
+        if len(episode_cache) >= EPISODE_CACHE_MAX_SIZE:
+            # Remove oldest entry (first key in dict - Python 3.7+ maintains insertion order)
+            episode_cache.pop(next(iter(episode_cache)))
         episode_cache[dest_filename] = extract_episode_info(dest_filename)
     
     dest_ep = episode_cache[dest_filename]
     if dest_ep:
         for src_name, src_size in read_files.items():
             if src_name not in episode_cache:
+                # Enforce cache size limit
+                if len(episode_cache) >= EPISODE_CACHE_MAX_SIZE:
+                    episode_cache.pop(next(iter(episode_cache)))
                 episode_cache[src_name] = extract_episode_info(src_name)
             
             if episode_cache[src_name] == dest_ep:
