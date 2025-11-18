@@ -559,15 +559,19 @@ def select_process_interactive() -> Optional[List[int]]:
 def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], FileTransferInfo], 
            last_update: float, path_cache: Optional[Dict[Tuple[str, int], str]] = None,
            proc_name_cache: Optional[Dict[int, str]] = None) -> None:
-    """Draw the curses UI
+    """Draw the curses UI with file transfer progress
+    
+    Renders a terminal UI showing active file transfers with progress bars,
+    transfer speeds, ETAs, and source/destination paths. Handles terminal
+    resize gracefully and uses caching for performance.
     
     Args:
-        stdscr: Curses screen object
+        stdscr: Curses screen object for rendering
         pid_list: List of process IDs being monitored
-        tracked_files: Dictionary of tracked file transfers
-        last_update: Timestamp of last update
-        path_cache: Optional dict to cache abbreviated paths
-        proc_name_cache: Optional dict to cache process names
+        tracked_files: Dictionary mapping (pid, file_key) to FileTransferInfo
+        last_update: Timestamp of last update (unused, kept for compatibility)
+        path_cache: Optional cache for abbreviated paths to improve render performance
+        proc_name_cache: Optional cache for process names to avoid repeated psutil calls
     """
     if path_cache is None:
         path_cache = {}
@@ -682,10 +686,14 @@ def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], Fi
 def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = None) -> None:
     """Main monitoring loop with curses UI
     
+    Continuously polls the specified processes for open file descriptors,
+    tracks file write progress, and displays real-time updates in a curses UI.
+    Handles terminal resizing, process exits, and user input (q to quit).
+    
     Args:
-        stdscr: Curses screen object
-        pid_list: List of process IDs to monitor
-        logger: Optional DebugLogger instance
+        stdscr: Curses screen object for rendering the UI
+        pid_list: List of process IDs to monitor for file operations
+        logger: Optional DebugLogger instance for debug output
     """
     if logger:
         logger.log(f"run_monitor started with PIDs: {pid_list}")
