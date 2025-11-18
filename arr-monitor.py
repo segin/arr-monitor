@@ -16,7 +16,7 @@ import platform
 from pathlib import Path
 from datetime import datetime
 from threading import Lock
-from typing import Optional, Dict, Tuple, List
+from typing import Optional, Dict, Tuple, List, NamedTuple
 
 # Check for Linux early
 if platform.system() != 'Linux':
@@ -93,6 +93,11 @@ IGNORE_EXTENSIONS = {
 ACCESS_MODE_READ = 0
 ACCESS_MODE_WRITE = 1
 ACCESS_MODE_READWRITE = 2
+
+class ReadFileInfo(NamedTuple):
+    """Information about a file being read by the process"""
+    size: int
+    path: str
 
 # Configuration constants grouped by category
 class Config:
@@ -376,8 +381,8 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
     if episode_cache is None:
         episode_cache = {}
     
-    open_files = {}
-    read_files = {}
+    open_files: Dict[str, FileTransferInfo] = {}
+    read_files: Dict[str, ReadFileInfo] = {}  # filename -> ReadFileInfo
     
     if verbose_log and logger:
         logger.log(f"=== VERBOSE SCAN of PID {pid} ===")
@@ -451,7 +456,7 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                 if access_mode == ACCESS_MODE_READ:
                     # Read file
                     filename = filepath.name
-                    read_files[filename] = (file_size, str(filepath))
+                    read_files[filename] = ReadFileInfo(size=file_size, path=str(filepath))
                     if verbose_log and logger:
                         logger.log(f"  Read file: {filename} ({file_size} bytes)")
                 
@@ -466,7 +471,9 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                     current_pos = file_size
                     
                     # Find matching source with caching
-                    match_result = find_matching_source(filename, {k: v[0] for k, v in read_files.items()}, episode_cache)
+                    # Convert read_files to simple dict for matching
+                    read_files_sizes = {name: info.size for name, info in read_files.items()}
+                    match_result = find_matching_source(filename, read_files_sizes, episode_cache)
                     
                     target_size = match_result
                     source_path = None
@@ -475,18 +482,18 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                     
                     if target_size is not None:
                         match_method = "pattern/exact"
-                        for src_name, (src_size, src_path) in read_files.items():
-                            if src_size == target_size:
+                        for src_name, src_info in read_files.items():
+                            if src_info.size == target_size:
                                 matched_source = src_name
-                                source_path = src_path
+                                source_path = src_info.path
                                 break
                     elif read_files:
-                        target_size = max(v[0] for v in read_files.values())
+                        target_size = max(info.size for info in read_files.values())
                         match_method = "largest"
-                        for src_name, (src_size, src_path) in read_files.items():
-                            if src_size == target_size:
+                        for src_name, src_info in read_files.items():
+                            if src_info.size == target_size:
                                 matched_source = src_name
-                                source_path = src_path
+                                source_path = src_info.path
                                 break
                     else:
                         target_size = max(file_size, 1)
