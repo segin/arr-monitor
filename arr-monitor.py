@@ -247,43 +247,79 @@ def extract_episode_info(filename: str) -> Optional[Tuple[int, int]]:
     
     return None
 
-def find_matching_source(dest_filename: str, read_files: Dict[str, int], 
-                        episode_cache: Dict[str, Optional[Tuple[int, int]]]) -> Optional[int]:
-    """Find the best matching source file for a destination
+def _match_by_exact_name(dest_filename: str, read_files: Dict[str, int]) -> Optional[int]:
+    """Try to match destination file by exact name (case-insensitive)
+    
+    Args:
+        dest_filename: Destination filename to match
+        read_files: Dict of {filename: size}
+    
+    Returns:
+        Size of matching source file, or None if no match
+    """
+    dest_lower = dest_filename.lower()
+    for src_name, src_size in read_files.items():
+        if src_name.lower() == dest_lower:
+            return src_size
+    return None
+
+def _match_by_episode_pattern(dest_filename: str, read_files: Dict[str, int],
+                              episode_cache: Dict[str, Optional[Tuple[int, int]]]) -> Optional[int]:
+    """Try to match destination file by episode pattern (S01E05, etc.)
     
     Args:
         dest_filename: Destination filename to match
         read_files: Dict of {filename: size}
         episode_cache: Dict to cache episode info extraction results
+    
+    Returns:
+        Size of matching source file, or None if no match
     """
-    dest_lower = dest_filename.lower()
-    
-    # Try exact match first (case-insensitive)
-    for src_name, src_size in read_files.items():
-        if src_name.lower() == dest_lower:
-            return src_size
-    
-    # Try episode pattern matching with caching
+    # Get or compute episode info for destination
     if dest_filename not in episode_cache:
-        # Enforce cache size limit using LRU-style eviction
         if len(episode_cache) >= Config.EPISODE_CACHE_MAX_SIZE:
-            # Remove oldest entry (first key in dict - Python 3.7+ maintains insertion order)
             episode_cache.pop(next(iter(episode_cache)))
         episode_cache[dest_filename] = extract_episode_info(dest_filename)
     
     dest_ep = episode_cache[dest_filename]
-    if dest_ep:
-        for src_name, src_size in read_files.items():
-            if src_name not in episode_cache:
-                # Enforce cache size limit
-                if len(episode_cache) >= Config.EPISODE_CACHE_MAX_SIZE:
-                    episode_cache.pop(next(iter(episode_cache)))
-                episode_cache[src_name] = extract_episode_info(src_name)
-            
-            if episode_cache[src_name] == dest_ep:
-                return src_size
+    if not dest_ep:
+        return None
+    
+    # Find source file with matching episode info
+    for src_name, src_size in read_files.items():
+        if src_name not in episode_cache:
+            if len(episode_cache) >= Config.EPISODE_CACHE_MAX_SIZE:
+                episode_cache.pop(next(iter(episode_cache)))
+            episode_cache[src_name] = extract_episode_info(src_name)
+        
+        if episode_cache[src_name] == dest_ep:
+            return src_size
     
     return None
+
+def find_matching_source(dest_filename: str, read_files: Dict[str, int], 
+                        episode_cache: Dict[str, Optional[Tuple[int, int]]]) -> Optional[int]:
+    """Find the best matching source file for a destination
+    
+    Tries multiple matching strategies in order:
+    1. Exact name match (case-insensitive)
+    2. Episode pattern match (S01E05, 1x05, etc.)
+    
+    Args:
+        dest_filename: Destination filename to match
+        read_files: Dict of {filename: size}
+        episode_cache: Dict to cache episode info extraction results
+    
+    Returns:
+        Size of matching source file, or None if no match found
+    """
+    # Try exact match first (fastest)
+    exact_match = _match_by_exact_name(dest_filename, read_files)
+    if exact_match is not None:
+        return exact_match
+    
+    # Try episode pattern matching
+    return _match_by_episode_pattern(dest_filename, read_files, episode_cache)
 
 # Cache for abbreviated paths to avoid recalculating on every render
 _path_abbreviation_cache = {}
