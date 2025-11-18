@@ -762,15 +762,17 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
                     logger.log(f"  File closed: {tracked_files[key].filename}")
                 del tracked_files[key]
             
-            # Clear path cache on terminal resize to avoid stale cached widths
+            # Handle terminal resize by clearing path cache
+            # Path abbreviations are width-dependent, so we need to recalculate them
             try:
                 current_width = stdscr.getmaxyx()[1]
                 if current_width != last_terminal_width:
                     path_abbreviation_cache.clear()
                     last_terminal_width = current_width
-                    if logger and verbose_this_iteration:
-                        logger.log(f"Terminal width changed to {current_width}, cleared path cache")
+                    if logger:
+                        logger.log(f"Terminal resized to width {current_width}, cleared path cache")
             except curses.error:
+                # Terminal might be in invalid state during resize
                 pass
             
             draw_ui(stdscr, active_pids, tracked_files, last_update, path_abbreviation_cache, process_name_cache)
