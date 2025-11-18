@@ -16,6 +16,7 @@ import platform
 from pathlib import Path
 from datetime import datetime
 from threading import Lock
+from typing import Optional, Dict, Tuple, List
 
 # Check for Linux early
 if platform.system() != 'Linux':
@@ -32,9 +33,9 @@ except ImportError:
 
 class DebugLogger:
     """Thread-safe debug logger with context manager support"""
-    def __init__(self, filepath=None):
+    def __init__(self, filepath: Optional[str] = None):
         self.filepath = filepath
-        self.file_handle = None
+        self.file_handle: Optional[object] = None
         self.lock = Lock()
     
     def __enter__(self):
@@ -58,7 +59,7 @@ class DebugLogger:
                 pass
         return False
     
-    def log(self, message):
+    def log(self, message: str) -> None:
         """Write debug message to log file"""
         if self.file_handle:
             with self.lock:
@@ -71,7 +72,7 @@ class DebugLogger:
                     pass
     
     @property
-    def is_enabled(self):
+    def is_enabled(self) -> bool:
         """Check if logging is enabled"""
         return self.file_handle is not None
 
@@ -115,7 +116,8 @@ class Config:
 
 class FileTransferInfo:
     """Tracks information about a file being written"""
-    def __init__(self, fd, filepath, position, size, target_size=None, source_filepath=None):
+    def __init__(self, fd: str, filepath: str, position: int, size: int, 
+                 target_size: Optional[int] = None, source_filepath: Optional[str] = None):
         self.fd = fd
         self.filepath = filepath
         self.source_filepath = source_filepath  # Store the source file path
@@ -125,10 +127,10 @@ class FileTransferInfo:
         self.initial_target = self.target_size
         self.last_position = position
         self.last_time = time.time()
-        self.speed = 0
+        self.speed: float = 0
         self.first_seen = time.time()
         
-    def update(self, position, size):
+    def update(self, position: int, size: int) -> None:
         """Update position, size, and calculate speed"""
         current_time = time.time()
         time_delta = current_time - self.last_time
@@ -150,7 +152,7 @@ class FileTransferInfo:
         self.last_time = current_time
     
     @property
-    def percent(self):
+    def percent(self) -> float:
         """Calculate percentage complete"""
         if self.target_size > 0:
             pct = (self.position / self.target_size) * 100
@@ -158,7 +160,7 @@ class FileTransferInfo:
         return 0
     
     @property
-    def eta_seconds(self):
+    def eta_seconds(self) -> Optional[float]:
         """Calculate ETA in seconds"""
         if self.speed > 0 and self.target_size > self.position:
             remaining = self.target_size - self.position
@@ -166,11 +168,11 @@ class FileTransferInfo:
         return None
     
     @property
-    def filename(self):
+    def filename(self) -> str:
         """Get just the filename"""
         return os.path.basename(self.filepath)
 
-def format_size(bytes_val):
+def format_size(bytes_val: float) -> str:
     """Format bytes as human-readable size"""
     for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
         if bytes_val < 1024.0:
@@ -178,11 +180,11 @@ def format_size(bytes_val):
         bytes_val /= 1024.0
     return f"{bytes_val:.1f} PiB"
 
-def format_speed(bytes_per_sec):
+def format_speed(bytes_per_sec: float) -> str:
     """Format bytes/sec as human-readable speed"""
     return format_size(bytes_per_sec) + "/s"
 
-def format_time(seconds):
+def format_time(seconds: Optional[float]) -> str:
     """Format seconds as HH:MM:SS or MM:SS"""
     if seconds is None:
         return "--:--"
@@ -195,7 +197,7 @@ def format_time(seconds):
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
 
-def extract_episode_info(filename):
+def extract_episode_info(filename: str) -> Optional[Tuple[int, int]]:
     """Extract season/episode information from filename
     
     Supports common TV episode naming patterns:
@@ -221,7 +223,8 @@ def extract_episode_info(filename):
     
     return None
 
-def find_matching_source(dest_filename, read_files, episode_cache):
+def find_matching_source(dest_filename: str, read_files: Dict[str, int], 
+                        episode_cache: Dict[str, Optional[Tuple[int, int]]]) -> Optional[int]:
     """Find the best matching source file for a destination
     
     Args:
@@ -261,7 +264,7 @@ def find_matching_source(dest_filename, read_files, episode_cache):
 # Cache for abbreviated paths to avoid recalculating on every render
 _path_abbreviation_cache = {}
 
-def abbreviate_path(path_str, max_width):
+def abbreviate_path(path_str: str, max_width: int) -> str:
     """Abbreviate a path to fit within max_width characters
     
     Automatically uses wcwidth library if available for proper double-width
@@ -324,12 +327,12 @@ def abbreviate_path(path_str, max_width):
     
     return result
 
-def should_ignore_file(filepath):
+def should_ignore_file(filepath: str) -> bool:
     """Check if file should be ignored"""
     path = Path(filepath)
     return path.suffix.lower() in IGNORE_EXTENSIONS
 
-def find_arr_processes():
+def find_arr_processes() -> List[Tuple[int, str]]:
     """Find all running *arr manager processes"""
     found = []
     for proc in psutil.process_iter(['pid', 'name']):
@@ -341,7 +344,9 @@ def find_arr_processes():
             pass
     return found
 
-def get_open_files(pid, logger=None, verbose_log=False, episode_cache=None):
+def get_open_files(pid: int, logger: Optional[DebugLogger] = None, 
+                  verbose_log: bool = False, 
+                  episode_cache: Optional[Dict[str, Optional[Tuple[int, int]]]] = None) -> Dict[str, FileTransferInfo]:
     """Get files currently being written by the process
     
     Args:
@@ -490,7 +495,7 @@ def get_open_files(pid, logger=None, verbose_log=False, episode_cache=None):
             logger.log(f"  Error scanning PID {pid}: {e}")
         return {}
 
-def select_process_interactive():
+def select_process_interactive() -> Optional[List[int]]:
     """Interactive process selection"""
     processes = find_arr_processes()
     
@@ -523,7 +528,8 @@ def select_process_interactive():
         except (ValueError, KeyboardInterrupt):
             return None
 
-def draw_ui(stdscr, pid_list, all_files, last_update, path_cache=None):
+def draw_ui(stdscr, pid_list: List[int], all_files: Dict[Tuple[int, str], FileTransferInfo], 
+           last_update: float, path_cache: Optional[Dict[Tuple[str, int], str]] = None) -> None:
     """Draw the curses UI
     
     Args:
@@ -634,7 +640,7 @@ def draw_ui(stdscr, pid_list, all_files, last_update, path_cache=None):
         # Silently handle curses errors during rendering (e.g., terminal resize)
         pass
 
-def run_monitor(stdscr, pid_list, logger=None):
+def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = None) -> None:
     """Main monitoring loop with curses UI
     
     Args:
@@ -756,7 +762,7 @@ def run_monitor(stdscr, pid_list, logger=None):
                 logger.log(f"Unexpected error: {e}")
             raise
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description='Monitor file write operations for *arr media managers',
         epilog='Examples:\n'
