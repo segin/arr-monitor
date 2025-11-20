@@ -404,6 +404,61 @@ def find_arr_processes() -> List[Tuple[int, str]]:
             pass
     return found
 
+def _parse_fdinfo_flags(fdinfo_path: Path, verbose_log: bool = False) -> Optional[int]:
+    """Parse file descriptor flags from fdinfo file
+    
+    Extracted for testability - reads fdinfo and returns the flags value.
+    
+    Args:
+        fdinfo_path: Path to the fdinfo file
+        verbose_log: Whether to parse position for verbose logging
+    
+    Returns:
+        File flags as integer, or None if parsing failed
+    """
+    try:
+        with open(fdinfo_path, 'r') as f:
+            for line in f:
+                if line.startswith('flags:'):
+                    return int(line.split()[1], 8)
+        return None
+    except (OSError, ValueError, IndexError):
+        return None
+
+def _determine_target_size(filename: str, file_size: int, read_files: Dict[str, ReadFileInfo],
+                          episode_cache: Dict[str, Optional[Tuple[int, int]]]) -> Tuple[Optional[int], Optional[str], str]:
+    """Determine target size and source path for a destination file
+    
+    Extracted for testability - implements the matching logic without file I/O.
+    
+    Args:
+        filename: Destination filename
+        file_size: Current size of destination file
+        read_files: Dictionary of source files being read
+        episode_cache: Cache for episode pattern matching
+    
+    Returns:
+        Tuple of (target_size, source_path, match_method)
+    """
+    # Convert read_files to simple dict for matching
+    read_files_sizes = {name: info.size for name, info in read_files.items()}
+    match_result = find_matching_source(filename, read_files_sizes, episode_cache)
+    
+    if match_result is not None:
+        # Found exact or pattern match
+        for src_name, src_info in read_files.items():
+            if src_info.size == match_result:
+                return (match_result, src_info.path, "pattern/exact")
+        # Shouldn't happen, but fallback
+        return (match_result, None, "pattern/exact")
+    elif read_files:
+        # Fallback to largest read file
+        largest_info = max(read_files.values(), key=lambda x: x.size)
+        return (largest_info.size, largest_info.path, "largest")
+    else:
+        # No read files, use current file size
+        return (max(file_size, 1), None, "fallback")
+
 def get_open_files(pid: int, logger: Optional[DebugLogger] = None, 
                   verbose_log: bool = False, 
                   episode_cache: Optional[Dict[str, Optional[Tuple[int, int]]]] = None) -> Dict[str, FileTransferInfo]:
@@ -473,22 +528,24 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                         logger.log(f"    Skipped: could not stat - {e}")
                     continue
                 
-                # Read fdinfo to get file flags (and position for debug logging)
-                flags = 0
-                position = 0  # Only used for verbose logging
-                
-                try:
-                    with open(fdinfo_path, 'r') as f:
-                        for line in f:
-                            if line.startswith('flags:'):
-                                flags = int(line.split()[1], 8)
-                            elif line.startswith('pos:') and verbose_log:
-                                # Only parse position if we're going to log it
-                                position = int(line.split()[1])
-                except (OSError, ValueError) as e:
+                # Read fdinfo to get file flags
+                flags = _parse_fdinfo_flags(fdinfo_path, verbose_log)
+                if flags is None:
                     if verbose_log and logger:
-                        logger.log(f"    Skipped: could not read fdinfo - {e}")
+                        logger.log(f"    Skipped: could not read fdinfo flags")
                     continue
+                
+                # Parse position only for verbose logging
+                position = 0
+                if verbose_log:
+                    try:
+                        with open(fdinfo_path, 'r') as f:
+                            for line in f:
+                                if line.startswith('pos:'):
+                                    position = int(line.split()[1])
+                                    break
+                    except (OSError, ValueError, IndexError):
+                        pass  # Position is only for logging, not critical
                 
                 # Extract access mode from flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
                 access_mode = flags & 0o3
@@ -514,34 +571,12 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                     filename = filepath.name
                     current_pos = file_size
                     
-                    # Find matching source with caching
-                    # Convert read_files to simple dict for matching
-                    read_files_sizes = {name: info.size for name, info in read_files.items()}
-                    match_result = find_matching_source(filename, read_files_sizes, episode_cache)
+                    # Determine target size and source using extracted helper function
+                    target_size, source_path, match_method = _determine_target_size(
+                        filename, file_size, read_files, episode_cache
+                    )
                     
-                    target_size = match_result
-                    source_path = None
-                    match_method = "none"
-                    matched_source = "none"
-                    
-                    if target_size is not None:
-                        match_method = "pattern/exact"
-                        for src_name, src_info in read_files.items():
-                            if src_info.size == target_size:
-                                matched_source = src_name
-                                source_path = src_info.path
-                                break
-                    elif read_files:
-                        target_size = max(info.size for info in read_files.values())
-                        match_method = "largest"
-                        for src_name, src_info in read_files.items():
-                            if src_info.size == target_size:
-                                matched_source = src_name
-                                source_path = src_info.path
-                                break
-                    else:
-                        target_size = max(file_size, 1)
-                        match_method = "fallback"
+                    matched_source = os.path.basename(source_path) if source_path else "none"
                     
                     if verbose_log and logger:
                         logger.log(f"  Write file: {filename}")
