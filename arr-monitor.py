@@ -432,7 +432,7 @@ def _parse_fdinfo_flags(fdinfo_path: Path, verbose_log: bool = False) -> Optiona
         return None
 
 def _determine_target_size(filename: str, file_size: int, read_files: Dict[str, ReadFileInfo],
-                          episode_cache: Dict[str, Optional[Tuple[int, int]]]) -> Tuple[Optional[int], Optional[str], str]:
+                          episode_cache: Dict[str, Optional[Tuple[int, int]]]) -> Tuple[int, Optional[str], str]:
     """Determine target size and source path for a destination file
     
     Extracted for testability - implements the matching logic without file I/O.
@@ -444,7 +444,7 @@ def _determine_target_size(filename: str, file_size: int, read_files: Dict[str, 
         episode_cache: Cache for episode pattern matching
     
     Returns:
-        Tuple of (target_size, source_path, match_method)
+        Tuple of (target_size, source_path, match_method) where target_size is always >= 1
     """
     # Convert read_files to simple dict for matching
     read_files_sizes = {name: info.size for name, info in read_files.items()}
