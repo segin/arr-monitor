@@ -871,6 +871,15 @@ def run_monitor(stdscr: CursesWindow, pid_list: List[int], logger: Optional[Debu
                     logger.log(f"  File closed: {tracked_files[file_key].filename}")
                 del tracked_files[file_key]
             
+            # Clean up process name cache for PIDs that no longer exist
+            # Check periodically to avoid overhead on every iteration
+            if iteration % Config.VERBOSE_LOG_INTERVAL == 0:
+                stale_pids = [pid for pid in process_name_cache if pid not in active_pids]
+                for pid in stale_pids:
+                    del process_name_cache[pid]
+                if stale_pids and logger:
+                    logger.log(f"Cleaned {len(stale_pids)} stale entries from process name cache")
+            
             # Handle terminal resize by clearing path cache
             # Path abbreviations are width-dependent, so we need to recalculate them
             try:
