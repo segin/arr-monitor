@@ -201,7 +201,14 @@ class FileTransferInfo:
         return os.path.basename(self.filepath)
 
 def format_size(bytes_val: float) -> str:
-    """Format bytes as human-readable size"""
+    """Format bytes as human-readable size
+    
+    Args:
+        bytes_val: Number of bytes to format
+    
+    Returns:
+        Human-readable size string (e.g., "1.5 GiB")
+    """
     for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
         if bytes_val < 1024.0:
             return f"{bytes_val:.1f} {unit}"
@@ -209,11 +216,25 @@ def format_size(bytes_val: float) -> str:
     return f"{bytes_val:.1f} PiB"
 
 def format_speed(bytes_per_sec: float) -> str:
-    """Format bytes/sec as human-readable speed"""
+    """Format bytes/sec as human-readable speed
+    
+    Args:
+        bytes_per_sec: Transfer speed in bytes per second
+    
+    Returns:
+        Human-readable speed string (e.g., "10.5 MiB/s")
+    """
     return format_size(bytes_per_sec) + "/s"
 
 def format_time(seconds: Optional[float]) -> str:
-    """Format seconds as HH:MM:SS or MM:SS"""
+    """Format seconds as HH:MM:SS or MM:SS
+    
+    Args:
+        seconds: Time duration in seconds, or None for unknown
+    
+    Returns:
+        Formatted time string (e.g., "1:23:45" or "5:30" or "--:--")
+    """
     if seconds is None:
         return "--:--"
     
