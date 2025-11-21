@@ -17,7 +17,7 @@ import platform
 from pathlib import Path
 from datetime import datetime
 from threading import Lock
-from typing import Optional, Dict, Tuple, List, NamedTuple
+from typing import Optional, Dict, Tuple, List, NamedTuple, TextIO
 
 # Check for Linux early
 if platform.system() != 'Linux':
@@ -36,7 +36,7 @@ class DebugLogger:
     """Thread-safe debug logger with context manager support"""
     def __init__(self, filepath: Optional[str] = None):
         self.filepath = filepath
-        self.file_handle: Optional[object] = None
+        self.file_handle: Optional[TextIO] = None
         self.lock = Lock()
     
     def __enter__(self):
