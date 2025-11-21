@@ -639,7 +639,7 @@ def select_process_interactive() -> Optional[List[int]]:
             return None
 
 def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], FileTransferInfo], 
-           last_update: float, path_cache: Optional[Dict[Tuple[str, int], str]] = None,
+           path_cache: Optional[Dict[Tuple[str, int], str]] = None,
            proc_name_cache: Optional[Dict[int, str]] = None) -> None:
     """Draw the curses UI with file transfer progress
     
@@ -651,7 +651,6 @@ def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], Fi
         stdscr: Curses screen object for rendering
         pid_list: List of process IDs being monitored
         tracked_files: Dictionary mapping (pid, file_key) to FileTransferInfo
-        last_update: Timestamp of last update (unused, kept for compatibility)
         path_cache: Optional cache for abbreviated paths to improve render performance
         proc_name_cache: Optional cache for process names to avoid repeated psutil calls
     """
@@ -788,7 +787,6 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
     curses.curs_set(0)
     
     tracked_files = {}
-    last_update = time.time()
     iteration = 0
     episode_cache = {}  # Cache for episode info extraction
     path_abbreviation_cache = {}  # Cache for abbreviated paths: (path, width) -> abbreviated_path
@@ -873,8 +871,7 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
                 # Terminal might be in invalid state during resize
                 pass
             
-            draw_ui(stdscr, active_pids, tracked_files, last_update, path_abbreviation_cache, process_name_cache)
-            last_update = time.time()
+            draw_ui(stdscr, active_pids, tracked_files, path_abbreviation_cache, process_name_cache)
             
             time.sleep(Config.POLL_INTERVAL_SECONDS)
         
