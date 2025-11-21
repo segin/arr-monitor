@@ -688,7 +688,7 @@ def draw_ui(stdscr: CursesWindow, pid_list: List[int], tracked_files: Dict[Tuple
                 try:
                     proc = psutil.Process(pid)
                     proc_name_cache[pid] = proc.name()
-                except:
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
                     proc_name_cache[pid] = f"PID {pid}"
             proc_name = f"{proc_name_cache[pid]} (PID: {pid})"
         else:
@@ -716,7 +716,7 @@ def draw_ui(stdscr: CursesWindow, pid_list: List[int], tracked_files: Dict[Tuple
                 try:
                     proc = psutil.Process(pid)
                     proc_name_cache[pid] = proc.name()
-                except:
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
                     proc_name_cache[pid] = f"PID {pid}"
             proc_name = proc_name_cache[pid]
             
