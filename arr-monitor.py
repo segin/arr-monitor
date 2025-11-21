@@ -89,10 +89,11 @@ IGNORE_EXTENSIONS = {
     '.zip', '.dll'
 }
 
-# File access modes from open() flags
+# File access modes from open() flags (O_RDONLY, O_WRONLY, O_RDWR)
 ACCESS_MODE_READ = 0
 ACCESS_MODE_WRITE = 1
 ACCESS_MODE_READWRITE = 2
+ACCESS_MODE_MASK = 0o3  # Mask to extract access mode from flags
 
 class ReadFileInfo(NamedTuple):
     """Information about a file being read by the process"""
@@ -114,6 +115,10 @@ class Config:
     PROGRESS_BAR_PADDING = 20
     MIN_TERMINAL_HEIGHT = 5
     MIN_TERMINAL_WIDTH = 20
+    PATH_INDENT = 2  # Indentation for source/destination paths
+    PATH_WIDTH_OFFSET = 3  # Offset for path abbreviation (indent + 1)
+    UI_BOTTOM_PADDING = 3  # Lines reserved at bottom for status
+    UI_FOOTER_PADDING = 2  # Lines reserved for footer spacing
     
     # Cache limits
     EPISODE_CACHE_MAX_SIZE = 1000  # Maximum entries in episode cache before clearing
@@ -553,7 +558,7 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                         pass  # Position is only for logging, not critical
                 
                 # Extract access mode from flags (O_RDONLY=0, O_WRONLY=1, O_RDWR=2)
-                access_mode = flags & 0o3
+                access_mode = flags & ACCESS_MODE_MASK
                 
                 if verbose_log and logger:
                     logger.log(f"    size={file_size} pos={position} flags={oct(flags)} mode={access_mode}")
@@ -697,7 +702,7 @@ def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], Fi
         
         row = 4
         for (pid, file_key), file_info in tracked_files.items():
-            if row >= height - 3:
+            if row >= height - Config.UI_BOTTOM_PADDING:
                 break
             
             # Use cached process name
@@ -715,14 +720,16 @@ def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], Fi
             stdscr.addstr(row, 0, header[:width-1], curses.A_BOLD | curses.color_pair(4))  # Green
             row += 1
             
-            # Red line: source path (indented by 2)
+            # Red line: source path (indented)
             if file_info.source_filepath:
-                source_display = "  " + abbreviate_path(file_info.source_filepath, width - 3, path_cache)
+                indent = " " * Config.PATH_INDENT
+                source_display = indent + abbreviate_path(file_info.source_filepath, width - Config.PATH_WIDTH_OFFSET, path_cache)
                 stdscr.addstr(row, 0, source_display[:width-1], curses.color_pair(8))  # Red
                 row += 1
             
-            # Blue line: destination path (indented by 2)
-            dest_display = "  " + abbreviate_path(file_info.filepath, width - 3, path_cache)
+            # Blue line: destination path (indented)
+            indent = " " * Config.PATH_INDENT
+            dest_display = indent + abbreviate_path(file_info.filepath, width - Config.PATH_WIDTH_OFFSET, path_cache)
             stdscr.addstr(row, 0, dest_display[:width-1], curses.color_pair(5))  # Blue
             row += 1
             
@@ -744,9 +751,9 @@ def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], Fi
                 if len(size_str) + len(info) < width - 1:
                     stdscr.addstr(row, len(size_str), info[:width-1-len(size_str)], curses.color_pair(7))
             
-            row += 2
+            row += Config.UI_FOOTER_PADDING
             
-            if row >= height - 2:
+            if row >= height - Config.UI_FOOTER_PADDING:
                 break
         
         stdscr.addstr(height - 1, 0, "Press 'q' to quit"[:width-1], curses.color_pair(2))
