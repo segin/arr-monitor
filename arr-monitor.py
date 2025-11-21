@@ -823,11 +823,15 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
             if verbose_this_iteration:
                 logger.log(f"=== Scan iteration {iteration} ===")
             
-            # Clear episode cache if it grows too large to prevent unbounded memory growth
+            # Trim episode cache if it grows too large to prevent unbounded memory growth
+            # Remove oldest 20% of entries instead of clearing all
             if len(episode_cache) > Config.EPISODE_CACHE_MAX_SIZE:
+                entries_to_remove = Config.EPISODE_CACHE_MAX_SIZE // 5
                 if logger:
-                    logger.log(f"Episode cache size {len(episode_cache)} exceeded limit, clearing")
-                episode_cache.clear()
+                    logger.log(f"Episode cache size {len(episode_cache)} exceeded limit, removing {entries_to_remove} oldest entries")
+                for _ in range(entries_to_remove):
+                    if episode_cache:
+                        episode_cache.pop(next(iter(episode_cache)))
             
             current_files = {}
             for pid in active_pids:
