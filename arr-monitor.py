@@ -519,7 +519,6 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                             logger.log(f"  FD {fd}: Skipped - non-absolute path: {filepath}")
                         continue
                     # Check for suspicious path traversal patterns
-                    path_str = str(filepath)
                     if '..' in filepath.parts:
                         if verbose_log and logger:
                             logger.log(f"  FD {fd}: Skipped - path contains traversal: {filepath}")
