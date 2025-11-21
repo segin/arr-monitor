@@ -321,25 +321,29 @@ def find_matching_source(dest_filename: str, read_files: Dict[str, int],
     # Try episode pattern matching
     return _match_by_episode_pattern(dest_filename, read_files, episode_cache)
 
-# Cache for abbreviated paths to avoid recalculating on every render
-_path_abbreviation_cache = {}
-
-def abbreviate_path(path_str: str, max_width: int) -> str:
+def abbreviate_path(path_str: str, max_width: int, cache: Optional[Dict[Tuple[str, int], str]] = None) -> str:
     """Abbreviate a path to fit within max_width characters
     
     Automatically uses wcwidth library if available for proper double-width
     character support (CJK, emoji, etc.). Falls back to simple character
     counting for ASCII/Latin text.
     
-    Results are cached to improve performance during repeated renders.
+    Args:
+        path_str: Path string to abbreviate
+        max_width: Maximum display width in characters
+        cache: Optional cache dict for storing results to improve performance
+    
+    Returns:
+        Abbreviated path string that fits within max_width
     """
     if max_width <= 0:
         return ""
     
-    # Check cache first
-    cache_key = (path_str, max_width)
-    if cache_key in _path_abbreviation_cache:
-        return _path_abbreviation_cache[cache_key]
+    # Check cache first if provided
+    if cache is not None:
+        cache_key = (path_str, max_width)
+        if cache_key in cache:
+            return cache[cache_key]
     
     # Calculate abbreviated path
     if HAS_WCWIDTH:
@@ -379,11 +383,13 @@ def abbreviate_path(path_str: str, max_width: int) -> str:
         else:
             result = path_str[:max_width]
     
-    # Store in cache with size limit
-    if len(_path_abbreviation_cache) >= Config.PATH_CACHE_MAX_SIZE:
-        # Remove oldest entry (first key)
-        _path_abbreviation_cache.pop(next(iter(_path_abbreviation_cache)))
-    _path_abbreviation_cache[cache_key] = result
+    # Store in cache with size limit if cache provided
+    if cache is not None:
+        cache_key = (path_str, max_width)
+        if len(cache) >= Config.PATH_CACHE_MAX_SIZE:
+            # Remove oldest entry (first key)
+            cache.pop(next(iter(cache)))
+        cache[cache_key] = result
     
     return result
 
@@ -713,18 +719,12 @@ def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], Fi
             
             # Red line: source path (indented by 2)
             if file_info.source_filepath:
-                cache_key = (file_info.source_filepath, width - 3)
-                if cache_key not in path_cache:
-                    path_cache[cache_key] = abbreviate_path(file_info.source_filepath, width - 3)
-                source_display = "  " + path_cache[cache_key]
+                source_display = "  " + abbreviate_path(file_info.source_filepath, width - 3, path_cache)
                 stdscr.addstr(row, 0, source_display[:width-1], curses.color_pair(8))  # Red
                 row += 1
             
             # Blue line: destination path (indented by 2)
-            cache_key = (file_info.filepath, width - 3)
-            if cache_key not in path_cache:
-                path_cache[cache_key] = abbreviate_path(file_info.filepath, width - 3)
-            dest_display = "  " + path_cache[cache_key]
+            dest_display = "  " + abbreviate_path(file_info.filepath, width - 3, path_cache)
             stdscr.addstr(row, 0, dest_display[:width-1], curses.color_pair(5))  # Blue
             row += 1
             
