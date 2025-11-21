@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import curses
+from curses import window as CursesWindow
 import psutil
 import argparse
 import re
@@ -642,7 +643,7 @@ def select_process_interactive() -> Optional[List[int]]:
         except (ValueError, KeyboardInterrupt):
             return None
 
-def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], FileTransferInfo], 
+def draw_ui(stdscr: CursesWindow, pid_list: List[int], tracked_files: Dict[Tuple[int, str], FileTransferInfo], 
            path_cache: Optional[Dict[Tuple[str, int], str]] = None,
            proc_name_cache: Optional[Dict[int, str]] = None) -> None:
     """Draw the curses UI with file transfer progress
@@ -764,7 +765,7 @@ def draw_ui(stdscr, pid_list: List[int], tracked_files: Dict[Tuple[int, str], Fi
         # Silently handle curses errors during rendering (e.g., terminal resize)
         pass
 
-def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = None) -> None:
+def run_monitor(stdscr: CursesWindow, pid_list: List[int], logger: Optional[DebugLogger] = None) -> None:
     """Main monitoring loop with curses UI
     
     Continuously polls the specified processes for open file descriptors,
