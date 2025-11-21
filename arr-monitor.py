@@ -135,11 +135,10 @@ class FileTransferInfo:
         self.speed: float = 0
         self.first_seen = time.time()
         
-    def update(self, position: int, size: int) -> None:
+    def update(self, size: int) -> None:
         """Update position, size, and calculate speed
         
         Args:
-            position: Current file position (not used, size is used instead)
             size: Current file size in bytes
         """
         # Validate inputs
@@ -843,7 +842,7 @@ def run_monitor(stdscr, pid_list: List[int], logger: Optional[DebugLogger] = Non
             for file_key, file_info in current_files.items():
                 if file_key in tracked_files:
                     old_pos = tracked_files[file_key].position
-                    tracked_files[file_key].update(file_info.position, file_info.size)
+                    tracked_files[file_key].update(file_info.size)
                     new_pos = tracked_files[file_key].position
                     if verbose_this_iteration and old_pos != new_pos:
                         logger.log(f"  Updated: {file_info.filename} {old_pos} -> {new_pos}")
