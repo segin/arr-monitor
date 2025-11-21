@@ -513,10 +513,16 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                 # Resolve symlink with early error handling
                 try:
                     filepath = fd_link.resolve()
-                    # Validate that resolved path is absolute and doesn't contain suspicious patterns
+                    # Validate that resolved path is absolute
                     if not filepath.is_absolute():
                         if verbose_log and logger:
                             logger.log(f"  FD {fd}: Skipped - non-absolute path: {filepath}")
+                        continue
+                    # Check for suspicious path traversal patterns
+                    path_str = str(filepath)
+                    if '..' in filepath.parts:
+                        if verbose_log and logger:
+                            logger.log(f"  FD {fd}: Skipped - path contains traversal: {filepath}")
                         continue
                 except (OSError, RuntimeError) as e:
                     if verbose_log and logger:
