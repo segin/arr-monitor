@@ -959,17 +959,19 @@ def main() -> int:
             return 1
     
     if args.debug:
-        for pid in pids:
-            print(f"\nDebug: Scanning /proc/{pid}/fd/...")
-            files = get_open_files(pid, verbose_log=True)
-            if not files:
-                print("No files found matching criteria")
-            else:
-                print(f"\nFound {len(files)} file(s) being written:")
-                for key, info in files.items():
-                    print(f"\n  FD {info.fd}: {info.filepath}")
-                    print(f"    Position: {info.position}, Target: {info.target_size}")
-                    print(f"    Percent: {info.percent:.1f}%")
+        # Use logger context manager even in debug mode
+        with logger:
+            for pid in pids:
+                print(f"\nDebug: Scanning /proc/{pid}/fd/...")
+                files = get_open_files(pid, logger=logger, verbose_log=True)
+                if not files:
+                    print("No files found matching criteria")
+                else:
+                    print(f"\nFound {len(files)} file(s) being written:")
+                    for key, info in files.items():
+                        print(f"\n  FD {info.fd}: {info.filepath}")
+                        print(f"    Position: {info.position}, Target: {info.target_size}")
+                        print(f"    Percent: {info.percent:.1f}%")
         return 0
     
     for pid in pids:
