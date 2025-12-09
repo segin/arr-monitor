@@ -68,4 +68,4 @@ Long paths will have the beginning of the path truncated off, see the screenshot
 
 ## License
 
-arr-monitor is provided under Creative Commons CC0 1.0 Universal.
+`arr-monitor` is provided under [Creative Commons CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).
