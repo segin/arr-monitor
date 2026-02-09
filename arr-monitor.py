@@ -87,7 +87,7 @@ ARR_MANAGERS = [
 IGNORE_EXTENSIONS = {
     '.db', '.db-wal', '.db-shm', '.db-journal',
     '.log', '.txt', '.xml', '.json', '.conf',
-    '.zip', '.dll'
+    '.zip', '.dll', '.nfo'
 }
 
 # File access modes from open() flags (O_RDONLY, O_WRONLY, O_RDWR)
@@ -593,6 +593,11 @@ def get_open_files(pid: int, logger: Optional[DebugLogger] = None,
                 # Categorize immediately
                 if access_mode == ACCESS_MODE_READ:
                     # Read file
+                    if should_ignore_file(str(filepath)):
+                        if verbose_log and logger:
+                            logger.log(f"    Skipped: ignored extension")
+                        continue
+
                     filename = filepath.name
                     read_files[filename] = ReadFileInfo(size=file_size, path=str(filepath))
                     if verbose_log and logger:
