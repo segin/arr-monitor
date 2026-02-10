@@ -107,6 +107,7 @@ class Config:
     # Polling and logging
     POLL_INTERVAL_SECONDS = 0.5
     VERBOSE_LOG_INTERVAL = 100  # Log verbosely every N iterations
+    NEW_PROCESS_SCAN_INTERVAL = 20  # Check for new *arr processes every N iterations
     
     # File transfer tracking
     TARGET_SIZE_EXPANSION_THRESHOLD = 1.1  # Expand target size if file exceeds by this factor
@@ -796,7 +797,12 @@ def draw_ui(stdscr: CursesWindow, pid_list: List[int], tracked_files: Dict[Tuple
         # Silently handle curses errors during rendering (e.g., terminal resize)
         pass
 
-def run_monitor(stdscr: CursesWindow, pid_list: List[int], logger: Optional[DebugLogger] = None) -> None:
+def run_monitor(
+    stdscr: CursesWindow,
+    pid_list: List[int],
+    logger: Optional[DebugLogger] = None,
+    add_new_processes: bool = False,
+) -> None:
     """Main monitoring loop with curses UI
     
     Continuously polls the specified processes for open file descriptors,
@@ -807,6 +813,7 @@ def run_monitor(stdscr: CursesWindow, pid_list: List[int], logger: Optional[Debu
         stdscr: Curses screen object for rendering the UI
         pid_list: List of process IDs to monitor for file operations
         logger: Optional DebugLogger instance for debug output
+        add_new_processes: When True, periodically scan for new *arr processes
     """
     if logger:
         logger.log(f"run_monitor started with PIDs: {pid_list}")
@@ -842,15 +849,34 @@ def run_monitor(stdscr: CursesWindow, pid_list: List[int], logger: Optional[Debu
                 break
             
             active_pids = [p for p in pid_list if psutil.pid_exists(p)]
-            if not active_pids:
-                if logger:
-                    logger.log("All processes exited")
-                stdscr.clear()
-                stdscr.addstr(0, 0, "All monitored processes have exited.", curses.A_BOLD)
-                stdscr.addstr(1, 0, "Press any key to exit...")
-                stdscr.nodelay(False)
-                stdscr.getch()
-                break
+            if add_new_processes:
+                if iteration % Config.NEW_PROCESS_SCAN_INTERVAL == 0 or not active_pids:
+                    processes = find_arr_processes()
+                    new_pids = [pid for pid, _ in processes if pid not in pid_list]
+                    if new_pids:
+                        pid_list.extend(new_pids)
+                        if logger:
+                            logger.log(f"Added {len(new_pids)} new process(es): {new_pids}")
+                    if pid_list:
+                        active_pids = [p for p in pid_list if psutil.pid_exists(p)]
+                if not active_pids:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, "Waiting for *arr processes to start...", curses.A_BOLD)
+                    stdscr.addstr(1, 0, "Press 'q' to quit", curses.A_DIM)
+                    stdscr.noutrefresh()
+                    curses.doupdate()
+                    time.sleep(Config.POLL_INTERVAL_SECONDS)
+                    continue
+            else:
+                if not active_pids:
+                    if logger:
+                        logger.log("All processes exited")
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, "All monitored processes have exited.", curses.A_BOLD)
+                    stdscr.addstr(1, 0, "Press any key to exit...")
+                    stdscr.nodelay(False)
+                    stdscr.getch()
+                    break
             
             # Only do verbose logging on first iteration or periodically
             # to avoid duplicate scanning overhead
@@ -956,7 +982,8 @@ def main() -> int:
         description='Monitor file write operations for *arr media managers',
         epilog='Examples:\n'
                '  %(prog)s              # Interactive process selection\n'
-               '  %(prog)s --all        # Monitor all detected *arr processes\n'
+               '  %(prog)s -a           # Monitor all detected *arr processes\n'
+               '  %(prog)s -a -A        # Monitor all and keep adding new processes\n'
                '  %(prog)s 1234         # Monitor specific PID\n'
                '  %(prog)s 1234 5678    # Monitor multiple PIDs\n'
                '  %(prog)s --debug 1234 # Show debug info for PID',
@@ -968,10 +995,16 @@ def main() -> int:
                        help='Show debug information')
     parser.add_argument('--log', type=str, metavar='FILE',
                        help='Enable debug logging to specified file')
-    parser.add_argument('--all', action='store_true',
+    parser.add_argument('-a', '--all', action='store_true',
                        help='Automatically monitor all detected *arr processes')
+    parser.add_argument('-A', '--add-new-processes', action='store_true',
+                       help='With --all, keep monitoring for newly started *arr processes')
     
     args = parser.parse_args()
+
+    if args.add_new_processes and not args.all:
+        print("Error: --add-new-processes requires --all")
+        return 1
     
     # Create logger context manager
     logger = DebugLogger(args.log) if args.log else DebugLogger()
@@ -993,14 +1026,17 @@ def main() -> int:
             print(f"Monitoring {len(pids)} processes: {', '.join(map(str, pids))}")
     elif args.all:
         processes = find_arr_processes()
-        if not processes:
+        if not processes and not args.add_new_processes:
             print("No *arr processes found running.")
             print(f"\nAvailable managers: {', '.join(ARR_MANAGERS)}")
             return 1
         pids = [pid for pid, name in processes]
-        print(f"Auto-detected {len(pids)} process(es):")
-        for pid, name in processes:
-            print(f"  - {name} (PID: {pid})")
+        if pids:
+            print(f"Auto-detected {len(pids)} process(es):")
+            for pid, name in processes:
+                print(f"  - {name} (PID: {pid})")
+        else:
+            print("No *arr processes found running. Waiting for new processes...")
     else:
         pids = select_process_interactive()
         if pids is None:
@@ -1042,7 +1078,7 @@ def main() -> int:
         try:
             if logger.is_enabled:
                 logger.log("Starting curses interface")
-            curses.wrapper(run_monitor, pids, logger)
+            curses.wrapper(run_monitor, pids, logger, args.add_new_processes)
             if logger.is_enabled:
                 logger.log("Curses interface exited normally")
         except KeyboardInterrupt:
