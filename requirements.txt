@@ -1,0 +1,3 @@
+psutil
+# Optional: more accurate widths for double-width characters
+wcwidth
